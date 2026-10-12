@@ -48,8 +48,8 @@ These choices differ from the original spec because this build's API has no equi
 | Spec asked for | What this build has, and what the mod does |
 | --- | --- |
 | A footer/status-bar component | `SessionMode`, the mode labels at the right of the prompt footer. The chip is drawn there, after any existing labels. |
-| A floating panel | A `Pane`: docked beside the transcript in fullscreen, inline above the prompt otherwise. The orange border is drawn only when docked, since an inline pane already has a frame. |
-| `[–]` outside the corner | Drawn inside the header row; the engine owns the pane's frame. |
+| A floating panel | The band above the prompt (`AbovePrompt`). The panel is a bordered box pushed to the band's right edge. It steps aside while a survey holds the band. |
+| `[–]` outside the corner | Drawn by Claude Code beside every band tree; it collapses the band (also ctrl+x ctrl+a). Click the band or press ctrl+x tab to give it the keyboard. |
 | A keybinding | None exists for plugins. `/tools` and `/rack` are registered `immediate`, so they run mid-turn without starting a turn. |
 | A `$.session` / `$.model` setter | None exists. A `turn.step` hook rewrites each main-loop request's model and effort. Subagent requests are left alone. |
 | A list of available models | None is exposed. The four models are a constant (`MODELS`). |
@@ -63,9 +63,9 @@ Hooks:
 - `session.start`: load saved settings, close the panel, register `/tools` and `/rack`.
 - `classic.SessionStart`: reload saved settings after `/clear`, `/resume` and `/branch`.
 - `command.run` on `tools` and `rack`: toggle the panel.
-- `ui.close`: track the panel closing, and stop the Agent Dock's timer.
+- `ui.close`: stop the Agent Dock's timer.
 - `ui.render` on `SessionMode`: the footer chip.
-- `ui.render` on `Pane` `rods-rack`: the control panel.
+- `ui.render` on `AbovePrompt`: the control panel.
 - `ui.render` on `Pane` `rods-rack-dock`: the Agent Dock.
 - `ui.render` on `ToolUse`, `ToolResult` and `PromptHint`: Clean View.
 - `turn.step`: apply model and effort, and record each subagent's model and start time.

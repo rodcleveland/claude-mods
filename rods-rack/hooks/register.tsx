@@ -23,7 +23,6 @@ const UPGRADE_SYSTEM =
   'Keep the user\'s intent and every constraint, file name, value and instruction they stated. ' +
   'Do not add requirements they did not ask for. Reply with the rewritten prompt only.'
 
-const PANEL = 'rods-rack'
 const DOCK = 'rods-rack-dock'
 const STORE_KEY = 'prefs'
 const UPGRADE_TIMEOUT_MS = 5000
@@ -88,22 +87,13 @@ async function setPrefs($: Dollar, change: (p: RackPrefs) => RackPrefs) {
   await $.store.set(STORE_KEY, next)
 }
 
-async function openPanel($: Dollar) {
-  await update($, panelOpen, () => true)
-  await $.ui.open({ id: PANEL, title: 'Rods Rack', focus: true, closeOnEscape: true, rows: 16, columns: 62 })
-}
-
+// The panel is drawn in the band above the prompt while panelOpen is set; the write redraws it.
 async function closePanel($: Dollar) {
   await update($, panelOpen, () => false)
-  await $.ui.close({ id: PANEL })
 }
 
 async function togglePanel($: Dollar) {
-  if (await read($, panelOpen)) {
-    await closePanel($)
-  } else {
-    await openPanel($)
-  }
+  await update($, panelOpen, isOpen => !isOpen)
 }
 
 let dockTimer: { cancel: () => void } | null = null
@@ -190,9 +180,6 @@ export const register: Register = on => {
   })
 
   on('ui.close', async ($, e, next) => {
-    if (e.id === PANEL) {
-      await update($, panelOpen, () => false)
-    }
     if (e.id === DOCK && dockTimer !== null) {
       dockTimer.cancel()
       dockTimer = null
@@ -214,13 +201,18 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANEL }, async ($, e) => {
+  // The panel: a bordered box at the right of the band above the prompt, where the engine draws
+  // its own [–] collapse mark just outside the top-right corner.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || !(await read($, panelOpen))) return next(e)
+
     const { Box, Text, Button } = $.ui.resolve(e)
     const isTerminal = e.surface === 'terminal'
     const p = await read($, prefs)
     const s = await read($, seen)
     const upgrade = await read($, lastUpgrade)
-    const width = Math.min(60, e.props.bodyColumns)
+    const outer = Math.min(64, e.props.bodyColumns)
+    const width = isTerminal ? outer - 4 : outer
 
     const activeFamily = p.model ?? familyOf(s.model)
     const activeEffort = p.effort ?? s.effort
@@ -250,10 +242,7 @@ export const register: Register = on => {
       <Box flexDirection="column" width={width}>
         <Box flexDirection="row" justifyContent="space-between">
           <Text bold color={ORANGE}>{isTerminal ? `◆ ${spaced('RODS RACK')}` : '◆ RODS RACK'}</Text>
-          <Box flexDirection="row" gap={1}>
-            <Text color="gray">{modelLabel} · {effortLabel}</Text>
-            <Button key="collapse" plain dimColor onPress={() => void closePanel($)}>[–]</Button>
-          </Box>
+          <Text color="gray">{modelLabel} · {effortLabel}</Text>
         </Box>
         <Text> </Text>
         <Box flexDirection="row" flexWrap="wrap">
@@ -323,10 +312,14 @@ export const register: Register = on => {
       </Box>
     )
 
-    return isTerminal && e.props.placement === 'dock' ? (
-      <Box borderStyle="round" borderColor={ORANGE} paddingX={1}>{body}</Box>
-    ) : (
-      body
+    return (
+      <Box flexDirection="row" justifyContent="flex-end" width={e.props.bodyColumns}>
+        {isTerminal ? (
+          <Box borderStyle="round" borderColor={ORANGE} paddingX={1} width={outer}>{body}</Box>
+        ) : (
+          body
+        )}
+      </Box>
     )
   })
 
