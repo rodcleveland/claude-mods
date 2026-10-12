@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
-const PREFS = { model: null, effort: null, cleanView: false, promptUpgrade: false, helper: 'same' }
+const PREFS = { model: null, effort: null, promptUpgrade: false, helper: 'same' }
 const BAND = {
   plugin: 'rods-rack',
   component: 'AbovePrompt',
@@ -48,10 +48,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await start($, 'startup')
     const panel = await openPanel($, surface)
 
-    await panel.press({ key: 'toggle-clean-view' })
+    await panel.press({ key: 'toggle-prompt-upgrade' })
+    expect(writes.at(-1)).toMatchObject({ key: 'prefs', value: { promptUpgrade: true } })
+    expect((await panel.find({ key: 'toggle-prompt-upgrade' }))?.text).toContain('On')
 
-    expect(writes.at(-1)).toMatchObject({ key: 'prefs', value: { cleanView: true } })
-    expect((await panel.find({ key: 'toggle-clean-view' }))?.text).toContain('On')
+    // Clean View starts on; the panel's switch is the same one /simple and the band's button flip.
+    await panel.press({ key: 'toggle-clean-view' })
+    expect(writes.at(-1)).toEqual({ key: 'cleanView', value: false })
+    expect((await panel.find({ key: 'toggle-clean-view' }))?.text).toContain('Off')
   })
 }
 
@@ -136,25 +140,3 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await band.find({ key: 'toggle-clean-view' })).toBeUndefined()
   })
 }
-
-test('clean view draws a tool call as one checklist line', async ($, on) => {
-  engine(on, { prefs: { ...PREFS, cleanView: true } })
-  await start($, 'startup')
-  const row = await $.ui.mount({
-    plugin: 'rods-rack',
-    surface: 'terminal',
-    component: 'ToolUse',
-    props: {
-      tool_use_id: 't1',
-      tool: 'Read',
-      input: { file_path: 'src/a.ts' },
-      isRunning: false,
-      isErrored: false,
-      isInterrupted: false,
-    },
-  })
-
-  const drawn = JSON.stringify(await row.drawn())
-  expect(drawn).toContain('✓')
-  expect(drawn).toContain('Read src/a.ts')
-})

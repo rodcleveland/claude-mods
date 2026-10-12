@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderInput } from 'claude-code'
 
 import type {
   RackAgent,
@@ -10,6 +10,7 @@ import type {
   RackSeen,
   RackUpgrade,
 } from '../types'
+import { registerCleanView } from './clean-view'
 
 // Edit this to change what "Create photo or video" asks for.
 export const CREATE_PROMPT =
@@ -25,6 +26,7 @@ const UPGRADE_SYSTEM =
 
 const DOCK = 'rods-rack-dock'
 const STORE_KEY = 'prefs'
+const CLEAN_VIEW_KEY = 'cleanView'
 const UPGRADE_TIMEOUT_MS = 5000
 
 const ORANGE = '#E8743B'
@@ -54,7 +56,6 @@ const HELPERS: ReadonlyArray<{ value: RackHelper; label: string; alias: 'haiku' 
 const DEFAULT_PREFS: RackPrefs = {
   model: null,
   effort: null,
-  cleanView: false,
   promptUpgrade: false,
   helper: 'same',
 }
@@ -63,6 +64,8 @@ const prefs = atom({ plugin: 'rods-rack', key: 'prefs' } as const, DEFAULT_PREFS
 const panelOpen = atom({ plugin: 'rods-rack', key: 'panelOpen' } as const, false)
 const seen = atom({ plugin: 'rods-rack', key: 'seen' } as const, { model: null, effort: null } as RackSeen)
 const agents = atom({ plugin: 'rods-rack', key: 'agents' } as const, {} as Record<string, RackAgent>)
+// Owned by Clean View (clean-view.tsx); the panel's switch writes the same value.
+const cleanViewEnabled = atom({ plugin: 'rods-rack', key: 'cleanViewEnabled' } as const, true)
 const lastUpgrade = atom({ plugin: 'rods-rack', key: 'lastUpgrade' } as const, null as RackUpgrade | null)
 const dockTick = atom({ plugin: 'rods-rack', key: 'dockTick' } as const, 0)
 
@@ -77,7 +80,9 @@ const isPrefs = (value: unknown): value is Partial<RackPrefs> =>
 async function hydrate($: Dollar) {
   const saved = await $.store.get(STORE_KEY)
   if (isPrefs(saved)) {
-    await update($, prefs, () => ({ ...DEFAULT_PREFS, ...saved }))
+    // Clean View's switch lives in its own store key now; an old cleanView field is dropped.
+    const { cleanView: _old, ...kept } = saved as Partial<RackPrefs> & { cleanView?: unknown }
+    await update($, prefs, () => ({ ...DEFAULT_PREFS, ...kept }))
   }
   $.ui.invalidate('ui.render')
 }
@@ -88,6 +93,13 @@ async function setPrefs($: Dollar, change: (p: RackPrefs) => RackPrefs) {
 }
 
 // The panel is drawn in the band above the prompt while panelOpen is set; the write redraws it.
+// The same switch as Clean View's own button and /simple.
+async function setCleanView($: Dollar, isOn: boolean) {
+  await update($, cleanViewEnabled, () => isOn)
+  await $.store.set(CLEAN_VIEW_KEY, isOn)
+  $.ui.toast(isOn ? 'Clean View is on' : 'Clean View is off: every step is showing again')
+}
+
 async function closePanel($: Dollar) {
   await update($, panelOpen, () => false)
 }
@@ -112,40 +124,142 @@ const rule = (label: string, width: number) => {
   return head + '─'.repeat(Math.max(2, width - head.length))
 }
 
-function describeCall(tool: string, input: unknown): string {
-  const args = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>
-  const pick = (...names: string[]) => {
-    for (const name of names) {
-      const value = args[name]
-      if (typeof value === 'string' && value !== '') return value
-    }
-    return ''
-  }
-  const verbs: Record<string, [string, string[]]> = {
-    Bash: ['Ran', ['description', 'command']],
-    Read: ['Read', ['file_path']],
-    Edit: ['Edited', ['file_path']],
-    Write: ['Wrote', ['file_path']],
-    NotebookEdit: ['Edited', ['notebook_path']],
-    Grep: ['Searched', ['pattern']],
-    Glob: ['Listed', ['pattern']],
-    WebFetch: ['Fetched', ['url']],
-    WebSearch: ['Searched the web for', ['query']],
-    Agent: ['Delegated', ['description']],
-    Skill: ['Used skill', ['skill']],
-  }
-  const [verb, fields] = verbs[tool] ?? [tool, ['description', 'file_path', 'path', 'query', 'url', 'command']]
-  const target = pick(...fields).split('\n')[0] ?? ''
-  return target === '' ? verb : `${verb} ${target.length > 80 ? target.slice(0, 79) + '…' : target}`
-}
-
 function elapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000))
   const minutes = Math.floor(seconds / 60)
   return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`
 }
 
+// The panel's body: model, effort, settings and launchers, in a bordered box at the band's right edge.
+async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
+  const { Box, Text, Button } = $.ui.resolve(e)
+  const isTerminal = e.surface === 'terminal'
+  const p = await read($, prefs)
+  const isClean = await read($, cleanViewEnabled)
+  const s = await read($, seen)
+  const upgrade = await read($, lastUpgrade)
+  const outer = Math.min(64, e.props.bodyColumns)
+  const width = isTerminal ? outer - 4 : outer
+
+  const activeFamily = p.model ?? familyOf(s.model)
+  const activeEffort = p.effort ?? s.effort
+  const modelLabel = MODELS.find(m => m.family === activeFamily)?.label ?? s.model ?? 'Default'
+  const effortLabel = EFFORTS.find(x => x.value === activeEffort)?.label ?? 'Default'
+  const helper = HELPERS.find(h => h.value === p.helper) ?? HELPERS[0]!
+
+  const heading = (label: string) =>
+    isTerminal ? <Text color={ORANGE}>{rule(label, width)}</Text> : <Text bold color={ORANGE}>{label}</Text>
+
+  const chip = (selected: boolean, label: string, background: string) => (
+    <Text {...(selected ? { color: INK, backgroundColor: background } : {})}> {label} </Text>
+  )
+
+  const toggleRow = (key: string, label: string, hint: string, isOn: boolean, flip: (p: RackPrefs) => RackPrefs) => (
+    <Box flexDirection="row">
+      <Text color={isOn ? 'green' : undefined}>{isOn ? '● ' : '○ '}</Text>
+      <Box width={16}><Text color="white">{label}</Text></Box>
+      <Box flexGrow={1}><Text dimColor>{hint}</Text></Box>
+      <Button key={key} plain onPress={() => void setPrefs($, flip)}>
+        {isOn ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
+      </Button>
+    </Box>
+  )
+
+  const body = (
+    <Box flexDirection="column" width={width}>
+      <Box flexDirection="row" justifyContent="space-between">
+        <Text bold color={ORANGE}>{isTerminal ? `◆ ${spaced('RODS RACK')}` : '◆ RODS RACK'}</Text>
+        <Text color="gray">{modelLabel} · {effortLabel}</Text>
+      </Box>
+      <Text> </Text>
+      <Box flexDirection="row" flexWrap="wrap">
+        <Text dimColor>{'MODEL   '}</Text>
+        {MODELS.map(m => (
+          <Button
+            key={`model-${m.family}`}
+            plain
+            {...(m.family === activeFamily ? { autoFocus: true as const } : {})}
+            onPress={() => void setPrefs($, x => ({ ...x, model: m.family }))}
+          >
+            {chip(m.family === activeFamily, m.label, ORANGE)}
+          </Button>
+        ))}
+      </Box>
+      <Box flexDirection="row" flexWrap="wrap">
+        <Text dimColor>{'EFFORT  '}</Text>
+        {EFFORTS.map(x => (
+          <Button key={`effort-${x.value}`} plain onPress={() => void setPrefs($, y => ({ ...y, effort: x.value }))}>
+            {chip(x.value === activeEffort, x.label, PURPLE)}
+          </Button>
+        ))}
+      </Box>
+      <Text> </Text>
+      {heading('SETTINGS')}
+      <Box flexDirection="row">
+        <Text color={isClean ? 'green' : undefined}>{isClean ? '● ' : '○ '}</Text>
+        <Box width={16}><Text color="white">Clean View</Text></Box>
+        <Box flexGrow={1}><Text dimColor>simple checklist</Text></Box>
+        <Button key="toggle-clean-view" plain onPress={() => void setCleanView($, !isClean)}>
+          {isClean ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
+        </Button>
+      </Box>
+      {toggleRow('toggle-prompt-upgrade', 'Prompt Upgrade', 'better prompts', p.promptUpgrade, x => ({ ...x, promptUpgrade: !x.promptUpgrade }))}
+      <Box flexDirection="row">
+        <Text color={p.helper !== 'same' ? 'green' : undefined}>{p.helper !== 'same' ? '● ' : '○ '}</Text>
+        <Box width={16}><Text color="white">Helper agents</Text></Box>
+        <Box flexGrow={1}><Text dimColor>model they use</Text></Box>
+        <Button
+          key="helper-cycle"
+          plain
+          onPress={() =>
+            void setPrefs($, x => {
+              const at = HELPERS.findIndex(h => h.value === x.helper)
+              return { ...x, helper: HELPERS[(at + 1) % HELPERS.length]!.value }
+            })
+          }
+        >
+          <Text>[{helper.label} ▸]</Text>
+        </Button>
+      </Box>
+      {upgrade !== null && (
+        <Button key="view-original" plain dimColor onPress={() => $.ui.log(`Original prompt:\n${upgrade.original}`)}>
+          Last prompt was upgraded. View the original
+        </Button>
+      )}
+      <Text> </Text>
+      {heading('LAUNCH')}
+      <Box flexDirection="row" gap={4}>
+        <Button
+          key="launch-create"
+          plain
+          onPress={async () => {
+            await closePanel($)
+            await $.prompt.submit({ text: CREATE_PROMPT })
+          }}
+        >
+          ✦ Create photo or video
+        </Button>
+        <Button key="launch-dock" plain onPress={() => void openDock($)}>
+          ◆ Agent Dock
+        </Button>
+      </Box>
+    </Box>
+  )
+
+  return (
+    <Box flexDirection="row" justifyContent="flex-end" width={e.props.bodyColumns}>
+      {isTerminal ? (
+        <Box borderStyle="round" borderColor={ORANGE} paddingX={1} width={outer}>{body}</Box>
+      ) : (
+        body
+      )}
+    </Box>
+  )
+}
+
 export const register: Register = on => {
+  registerCleanView(on)
+
   on('session.start', async ($, e, next) => {
     await hydrate($)
     await update($, panelOpen, () => false)
@@ -201,124 +315,17 @@ export const register: Register = on => {
     )
   })
 
-  // The panel: a bordered box at the right of the band above the prompt, where the engine draws
-  // its own [–] collapse mark just outside the top-right corner.
+  // The panel: a bordered box at the right of the band above the prompt, below whatever else draws
+  // there (Clean View's checklist). The engine draws its [–] collapse mark outside it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await read($, panelOpen))) return next(e)
-
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const isTerminal = e.surface === 'terminal'
-    const p = await read($, prefs)
-    const s = await read($, seen)
-    const upgrade = await read($, lastUpgrade)
-    const outer = Math.min(64, e.props.bodyColumns)
-    const width = isTerminal ? outer - 4 : outer
-
-    const activeFamily = p.model ?? familyOf(s.model)
-    const activeEffort = p.effort ?? s.effort
-    const modelLabel = MODELS.find(m => m.family === activeFamily)?.label ?? s.model ?? 'Default'
-    const effortLabel = EFFORTS.find(x => x.value === activeEffort)?.label ?? 'Default'
-    const helper = HELPERS.find(h => h.value === p.helper) ?? HELPERS[0]!
-
-    const heading = (label: string) =>
-      isTerminal ? <Text color={ORANGE}>{rule(label, width)}</Text> : <Text bold color={ORANGE}>{label}</Text>
-
-    const chip = (selected: boolean, label: string, background: string) => (
-      <Text {...(selected ? { color: INK, backgroundColor: background } : {})}> {label} </Text>
-    )
-
-    const toggleRow = (key: string, label: string, hint: string, isOn: boolean, flip: (p: RackPrefs) => RackPrefs) => (
-      <Box flexDirection="row">
-        <Text color={isOn ? 'green' : undefined}>{isOn ? '● ' : '○ '}</Text>
-        <Box width={16}><Text color="white">{label}</Text></Box>
-        <Box flexGrow={1}><Text dimColor>{hint}</Text></Box>
-        <Button key={key} plain onPress={() => void setPrefs($, flip)}>
-          {isOn ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
-        </Button>
-      </Box>
-    )
-
-    const body = (
-      <Box flexDirection="column" width={width}>
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text bold color={ORANGE}>{isTerminal ? `◆ ${spaced('RODS RACK')}` : '◆ RODS RACK'}</Text>
-          <Text color="gray">{modelLabel} · {effortLabel}</Text>
-        </Box>
-        <Text> </Text>
-        <Box flexDirection="row" flexWrap="wrap">
-          <Text dimColor>{'MODEL   '}</Text>
-          {MODELS.map(m => (
-            <Button
-              key={`model-${m.family}`}
-              plain
-              {...(m.family === activeFamily ? { autoFocus: true as const } : {})}
-              onPress={() => void setPrefs($, x => ({ ...x, model: m.family }))}
-            >
-              {chip(m.family === activeFamily, m.label, ORANGE)}
-            </Button>
-          ))}
-        </Box>
-        <Box flexDirection="row" flexWrap="wrap">
-          <Text dimColor>{'EFFORT  '}</Text>
-          {EFFORTS.map(x => (
-            <Button key={`effort-${x.value}`} plain onPress={() => void setPrefs($, y => ({ ...y, effort: x.value }))}>
-              {chip(x.value === activeEffort, x.label, PURPLE)}
-            </Button>
-          ))}
-        </Box>
-        <Text> </Text>
-        {heading('SETTINGS')}
-        {toggleRow('toggle-clean-view', 'Clean View', 'simple checklist', p.cleanView, x => ({ ...x, cleanView: !x.cleanView }))}
-        {toggleRow('toggle-prompt-upgrade', 'Prompt Upgrade', 'better prompts', p.promptUpgrade, x => ({ ...x, promptUpgrade: !x.promptUpgrade }))}
-        <Box flexDirection="row">
-          <Text color={p.helper !== 'same' ? 'green' : undefined}>{p.helper !== 'same' ? '● ' : '○ '}</Text>
-          <Box width={16}><Text color="white">Helper agents</Text></Box>
-          <Box flexGrow={1}><Text dimColor>model they use</Text></Box>
-          <Button
-            key="helper-cycle"
-            plain
-            onPress={() =>
-              void setPrefs($, x => {
-                const at = HELPERS.findIndex(h => h.value === x.helper)
-                return { ...x, helper: HELPERS[(at + 1) % HELPERS.length]!.value }
-              })
-            }
-          >
-            <Text>[{helper.label} ▸]</Text>
-          </Button>
-        </Box>
-        {upgrade !== null && (
-          <Button key="view-original" plain dimColor onPress={() => $.ui.log(`Original prompt:\n${upgrade.original}`)}>
-            Last prompt was upgraded. View the original
-          </Button>
-        )}
-        <Text> </Text>
-        {heading('LAUNCH')}
-        <Box flexDirection="row" gap={4}>
-          <Button
-            key="launch-create"
-            plain
-            onPress={async () => {
-              await closePanel($)
-              await $.prompt.submit({ text: CREATE_PROMPT })
-            }}
-          >
-            ✦ Create photo or video
-          </Button>
-          <Button key="launch-dock" plain onPress={() => void openDock($)}>
-            ◆ Agent Dock
-          </Button>
-        </Box>
-      </Box>
-    )
-
+    const above = await next(e)
+    const panel = await drawPanel($, e)
+    const { Box } = $.ui.resolve(e)
     return (
-      <Box flexDirection="row" justifyContent="flex-end" width={e.props.bodyColumns}>
-        {isTerminal ? (
-          <Box borderStyle="round" borderColor={ORANGE} paddingX={1} width={outer}>{body}</Box>
-        ) : (
-          body
-        )}
+      <Box flexDirection="column" width={e.props.bodyColumns}>
+        {above}
+        {panel}
       </Box>
     )
   })
@@ -376,33 +383,6 @@ export const register: Register = on => {
       ...(p.effort !== null && e.effort !== undefined ? { effort: p.effort } : {}),
     }
     return yield* next(request)
-  })
-
-  // Clean View: one line per tool call, its result block hidden.
-  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!(await read($, prefs)).cleanView) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const { isRunning, isErrored, isInterrupted, tool, input } = e.props
-    const mark = isRunning ? '…' : isErrored || isInterrupted ? '✗' : '✓'
-    const color = isRunning ? 'gray' : isErrored || isInterrupted ? 'error' : 'success'
-
-    return (
-      <Box flexDirection="row">
-        <Text color={color}>{mark} </Text>
-        <Text wrap="truncate-end">{describeCall(tool, input)}</Text>
-      </Box>
-    )
-  })
-
-  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!(await read($, prefs)).cleanView) return next(e)
-    const { Box } = $.ui.resolve(e)
-    return <Box />
-  })
-
-  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    if (!(await read($, prefs)).cleanView) return next(e)
-    return next({ ...e, props: { ...e.props, tail: 'Clean View —' } })
   })
 
   // Prompt Upgrade: rewrite the person's own prompt on the cheapest model, or send it as typed.
