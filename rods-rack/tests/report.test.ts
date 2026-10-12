@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { addDays, classify, dayOfYear, emptyDay, isTypedPrompt, recordTask, signalsOf, streak, sumDays } from '../hooks/report-logic'
+import { addDays, classify, dayOfYear, emptyDay, isTypedPrompt, recordTask, signalsOf, streak, sumDays, writesOutsideTmp } from '../hooks/report-logic'
 
 const TODAY = '2026-10-12'
 const PANE = {
@@ -218,4 +218,53 @@ test('a coding request is recorded under Coding with its own minutes', async ($,
   const row = text.slice(text.indexOf('"Coding'), text.indexOf('"Other'))
   expect(row).toContain('"      1"')
   expect(row).toContain('0.5 h')
+})
+
+// The same commands, and answers, the history script's writes_outside_tmp() is checked against.
+const SHELL_CASES: ReadonlyArray<[string, boolean]> = [
+  ["cd /home/u/proj && sed -i 's/a/b/' src/app.ts", true],
+  ["cat > /tmp/x.txt <<'EOF'\nhello > /home/u/nope.txt\nEOF", false],
+  ["D=/tmp/claude-1/x; mkdir -p $D && cat > $D/notes.md <<'EOF'\nbody\nEOF", false],
+  ["python3 - <<'EOF'\np='hooks/report.tsx'\ns=open(p).read()\nopen(p,'w').write(s)\nEOF", true],
+  ["cd /tmp/claude-1/scratch && python3 - <<'EOF'\nopen('out.json','w').write('{}')\nEOF", false],
+  ['rg -n foo src 2>/dev/null | head -5', false],
+  ['cp /tmp/a.png /mnt/c/Users/me/Downloads/a.png', true],
+  ['mkdir -p /tmp/claude-1/scratch', false],
+  ['curl -s https://example.com/a > /tmp/a.html', false],
+  ['ls -la > /dev/null', false],
+  ['echo hi >> notes.md', true],
+  ['cd /home/u/proj && git status && cat README.md', false],
+  ['python3 rods-rack/scripts/report-history.py', false],
+]
+
+test('shell edits and scripts that write outside /tmp count as Coding', async () => {
+  for (const [command, expected] of SHELL_CASES) expect([command, writesOutsideTmp(command)]).toEqual([command, expected])
+  expect(classify(signalsOf('Bash', { command: "cd /home/u/proj && sed -i 's/a/b/' src/app.ts" }))).toBe('coding')
+  expect(classify(signalsOf('Bash', { command: 'mkdir -p /tmp/claude-1/scratch' }))).toBe('other')
+})
+
+test('curl with flags is research, generate is images and video, the browser is research', async () => {
+  expect(classify(signalsOf('Bash', { command: 'curl -sL https://example.com/page' }))).toBe('research')
+  expect(classify(signalsOf('Skill', { skill: 'generate' }))).toBe('media')
+  expect(classify(signalsOf('mcp__claude-in-chrome__get_page_text', {}))).toBe('research')
+  // A browser tool whose name says gif or image is still browsing, not image work.
+  expect(classify(signalsOf('mcp__claude-in-chrome__gif_creator', {}))).toBe('research')
+  // Coordination tools and plain answers stay in Other.
+  expect(classify(signalsOf('AskUserQuestion', {}))).toBe('other')
+})
+
+test('artifacts are their own kind, ranked above coding and below documents', async () => {
+  expect(classify(signalsOf('Artifact', { file_path: '/tmp/page.html' }))).toBe('artifacts')
+  expect(classify(signalsOf('ArtifactData', {}))).toBe('artifacts')
+  // A coding session that publishes its page counts as Artifacts.
+  expect(classify([...signalsOf('Edit', { file_path: '/src/board.tsx' }), ...signalsOf('Artifact', {})])).toBe('artifacts')
+  // A document written alongside still counts as Documents.
+  expect(classify([...signalsOf('Artifact', {}), ...signalsOf('Write', { file_path: '/out/brief.docx' })])).toBe('documents')
+})
+
+test('/report settings has its own Artifacts minutes', async ($, on) => {
+  engine(on)
+  await start($)
+  expect((await $.command.run({ command: 'report', args: 'settings' } as never)).text).toContain('Artifacts: 30 minutes')
+  expect((await $.command.run({ command: 'report', args: 'settings artifacts 45' } as never)).text).toContain('Artifacts: 45 minutes')
 })

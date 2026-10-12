@@ -81,7 +81,7 @@ export type DockMission = {
   finishedAt: number | null
 }
 
-export type ReportKind = 'emails' | 'documents' | 'media' | 'research' | 'coding' | 'other'
+export type ReportKind = 'emails' | 'documents' | 'media' | 'artifacts' | 'research' | 'coding' | 'other'
 export type ReportTab = 'today' | 'week' | 'month' | 'year'
 
 // One calendar day's work: finished tasks per kind and per model.

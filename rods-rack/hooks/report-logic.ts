@@ -3,12 +3,13 @@ import type { ReportDay, ReportHistory, ReportKind, ReportSettings, ReportTab } 
 // The Work Report's plain logic, with no engine calls: sorting a task by its tools, which prompts
 // count, calendar days stepped at noon, adding days, ranges, streaks, estimates and big numerals.
 
-export const KINDS: readonly ReportKind[] = ['emails', 'documents', 'media', 'research', 'coding', 'other']
+export const KINDS: readonly ReportKind[] = ['emails', 'documents', 'media', 'artifacts', 'research', 'coding', 'other']
 
 export const KIND_LABELS: Readonly<Record<ReportKind, string>> = {
   emails: 'Emails',
   documents: 'Documents',
   media: 'Images and video',
+  artifacts: 'Artifacts',
   research: 'Research',
   coding: 'Coding',
   other: 'Other',
@@ -23,6 +24,8 @@ export const KIND_SETTING_NAMES: Readonly<Record<string, ReportKind>> = {
   images: 'media',
   video: 'media',
   media: 'media',
+  artifacts: 'artifacts',
+  artifact: 'artifacts',
   research: 'research',
   coding: 'coding',
   code: 'coding',
@@ -30,7 +33,7 @@ export const KIND_SETTING_NAMES: Readonly<Record<string, ReportKind>> = {
 }
 
 export const DEFAULT_SETTINGS: ReportSettings = {
-  minutes: { emails: 10, documents: 30, media: 20, research: 25, coding: 20, other: 10 },
+  minutes: { emails: 10, documents: 30, media: 20, artifacts: 30, research: 25, coding: 20, other: 10 },
   rate: 50,
 }
 
@@ -47,6 +50,7 @@ export const KIND_COLORS: Readonly<Record<ReportKind, string>> = {
   emails: '#8F9BFF',
   documents: GOLD,
   media: '#E06C9F',
+  artifacts: '#E8743B',
   research: GREEN,
   coding: '#6CC5E8',
   other: MUTED,
@@ -74,30 +78,95 @@ export function signalsOf(tool: string, input: Record<string, unknown>): string[
     }
   }
   if (typeof input.skill === 'string') out.push(`skill:${input.skill}`)
-  if (typeof input.command === 'string') out.push(`bash:${input.command.slice(0, 300)}`)
+  if (typeof input.command === 'string') out.push(`bash:${input.command.slice(0, 4000)}`)
   return out
 }
 
 const MAIL = /gmail|outlook|email|_mail|mail_/i
-const MEDIA_TOOL = /image|video|openart|higgsfield|photo|thumbnail|gif|nano.?banana|generate_image/i
+// "generate" is the image and video skill. Browser tools that happen to say image or gif are not.
+const MEDIA_TOOL = /image|video|openart|higgsfield|photo|thumbnail|gif|nano.?banana|generate_image|^generate$/i
+const BROWSER = /claude-in-chrome|chrome-browser|agent-browser|browser_/i
 const MEDIA_FILE = /\.(png|jpe?g|gif|webp|heic|svg|mp4|mov|webm|m4v|avi|mkv)$/i
 const DOC_TOOL = /docx|pptx|xlsx|\bpdf\b|_pdf|pdf_|slides?|spreadsheet|sheets?|claude_docs|google_drive|documents?|word/i
+// Artifacts: published pages, dashboards and apps (Artifact, ArtifactData, ArtifactComments).
+const ARTIFACT_TOOL = /artifact/i
 const DOC_FILE = /\.(docx?|pptx?|xlsx?|pdf|odt|rtf|key|pages)$/i
-// Coding: a file written that is no image, video or document, or a build, test or git command.
+// Coding: a file written that is no image, video or document, a build, test or git command, or a
+// shell edit or script that changed a file outside /tmp.
 const CODE_COMMAND = /\b(git (commit|push|merge|rebase|checkout|switch)|npm (run|test|install|ci)|npx|pnpm|yarn|bun|pytest|jest|vitest|tsc|cargo|go (build|test|run)|dotnet|msbuild|gradle|mvn|make|claude plugin (test|validate))\b/
-const RESEARCH = /websearch|webfetch|web_search|fetch|search_web|transcript|youtube|yt-dlp|context7|scrape|deep-research|research/i
+// Research includes reading the web through a browser; a download is curl or wget fetching a URL,
+// whatever flags come first.
+const RESEARCH = /websearch|webfetch|web_search|fetch|search_web|transcript|youtube|yt-dlp|context7|scrape|deep-research|research|claude-in-chrome|chrome-browser|agent-browser|browser_/i
+const DOWNLOAD = /yt-dlp|\b(curl|wget)\b[^|;&\n]*https?:\/\//
+
+// ── Shell work that changed files outside /tmp ───────────────────────────────
+
+const SCRIPT_WRITE = /\b(python3?|node)\b[\s\S]*(open\([^)]*['"][wax]\+?['"]|write_text|\.write\(|writeFileSync|json\.dump)/
+const QUOTED_PATH = /['"]((?:~|\.{1,2})?\/?[\w.@~-]+(?:\/[\w.@~-]+)*\.[A-Za-z]\w{0,5}|\/[\w.@~-]+(?:\/[\w.@~-]+)+)['"]/g
+const words = (segment: string) => (segment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(w => w.replace(/^['"]|['"]$/g, ''))
+
+// Where one line of shell writes: redirect targets, tee's files, sed -i's file, cp and mv's
+// destination, and what rm, mkdir and touch name.
+function shellTargets(line: string): string[] {
+  const out: string[] = []
+  for (const segment of line.split(/&&|\|\||;|\|/)) {
+    const ws = words(segment.trim())
+    for (let i = 0; i < ws.length; i += 1) {
+      const w = ws[i]!
+      if (w === '>' || w === '>>') out.push(ws[i + 1] ?? '')
+      else if (/^>>?[^>&]/.test(w)) out.push(w.replace(/^>>?/, ''))
+    }
+    const args = ws.filter(w => !/^\w+=/.test(w))
+    const cmd = args[0] ?? ''
+    const rest = args.slice(1).filter(w => !w.startsWith('-') && !w.startsWith('>') && !/^\d?>/.test(w))
+    if (cmd === 'tee' || cmd === 'rm' || cmd === 'mkdir' || cmd === 'touch') out.push(...rest)
+    else if ((cmd === 'cp' || cmd === 'mv') && rest.length > 1) out.push(rest.at(-1)!)
+    else if (cmd === 'sed' && args.some(a => /^-i/.test(a)) && rest.length > 0) out.push(rest.at(-1)!)
+  }
+  return out.filter(p => p !== '')
+}
+
+// True when a shell command changed a file outside /tmp: by redirect, tee, sed -i, cp, mv, rm,
+// mkdir or touch, or with a Python or Node script that writes a quoted path.
+export function writesOutsideTmp(command: string): boolean {
+  const vars = new Map<string, string>()
+  for (const m of command.matchAll(/(?:^|[\s;&])([A-Za-z_]\w*)=("([^"]*)"|'([^']*)'|([^\s;&]+))/g)) vars.set(m[1]!, m[3] ?? m[4] ?? m[5] ?? '')
+  const text = command.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (all, name: string) => vars.get(name) ?? all)
+  const cd = /(?:^|[\s;&(])cd\s+("([^"]+)"|'([^']+)'|([^\s;&|]+))/.exec(text)
+  const cwd = cd === null ? '' : (cd[2] ?? cd[3] ?? cd[4] ?? '')
+
+  // The shell's own lines, skipping heredoc bodies; a script's body is read for the paths it writes.
+  const targets: string[] = []
+  let heredoc: string | null = null
+  for (const line of text.split('\n')) {
+    if (heredoc !== null) {
+      if (line.trim() === heredoc) heredoc = null
+      continue
+    }
+    targets.push(...shellTargets(line))
+    const opens = /<<-?\s*['"]?(\w+)['"]?/.exec(line)
+    if (opens !== null) heredoc = opens[1]!
+  }
+  if (SCRIPT_WRITE.test(text)) for (const m of text.matchAll(QUOTED_PATH)) targets.push(m[1]!)
+
+  const isTmp = (p: string) =>
+    p.startsWith('/tmp/') || p === '/tmp' || (!p.startsWith('/') && !p.startsWith('~') && (cwd.startsWith('/tmp/') || cwd === '/tmp'))
+  return targets.some(p => !p.startsWith('/dev/') && !/^\w+:\/\//.test(p) && !isTmp(p))
+}
 
 // One kind per task, the first that any of its signals matches: Emails, Images and video, Documents,
-// Coding, Research, then Other. Coding outranks Research, so looking up docs while coding is coding.
+// Artifacts, Coding, Research, then Other. Artifacts outrank Coding, so building a page that gets
+// published counts as Artifacts; Coding outranks Research, so looking up docs while coding is coding.
 export function classify(signals: readonly string[]): ReportKind {
   const tools = signals.filter(s => s.startsWith('tool:') || s.startsWith('skill:')).map(s => s.slice(s.indexOf(':') + 1))
   const files = signals.filter(s => s.startsWith('file:')).map(s => s.slice(5))
   const commands = signals.filter(s => s.startsWith('bash:')).map(s => s.slice(5))
   if (tools.some(t => MAIL.test(t))) return 'emails'
-  if (tools.some(t => MEDIA_TOOL.test(t)) || files.some(f => MEDIA_FILE.test(f))) return 'media'
+  if (tools.some(t => MEDIA_TOOL.test(t) && !BROWSER.test(t)) || files.some(f => MEDIA_FILE.test(f))) return 'media'
   if (tools.some(t => DOC_TOOL.test(t)) || files.some(f => DOC_FILE.test(f))) return 'documents'
-  if (files.length > 0 || commands.some(c => CODE_COMMAND.test(c))) return 'coding'
-  if (tools.some(t => RESEARCH.test(t)) || commands.some(c => /yt-dlp|curl\s+https?:/.test(c))) return 'research'
+  if (tools.some(t => ARTIFACT_TOOL.test(t))) return 'artifacts'
+  if (files.length > 0 || commands.some(c => CODE_COMMAND.test(c) || writesOutsideTmp(c))) return 'coding'
+  if (tools.some(t => RESEARCH.test(t)) || commands.some(c => DOWNLOAD.test(c))) return 'research'
   return 'other'
 }
 
@@ -112,7 +181,7 @@ export function modelLabel(model: string | null | undefined): string {
 
 // ── Days ─────────────────────────────────────────────────────────────────────
 
-export const emptyDay = (): ReportDay => ({ kinds: { emails: 0, documents: 0, media: 0, research: 0, coding: 0, other: 0 }, models: {} })
+export const emptyDay = (): ReportDay => ({ kinds: { emails: 0, documents: 0, media: 0, artifacts: 0, research: 0, coding: 0, other: 0 }, models: {} })
 
 export function recordTask(day: ReportDay | undefined, kind: ReportKind, model: string): ReportDay {
   const base = day ?? emptyDay()
@@ -288,7 +357,7 @@ export function changeSettings(settings: ReportSettings, args: string): ReportSe
   if (!Number.isFinite(n) || n < 0 || n > 100_000 || value === '') return 'Give a number, like /report settings rate 75.'
   if (name === 'rate') return { ...settings, rate: n }
   const kind = KIND_SETTING_NAMES[name]
-  if (kind === undefined) return 'Change rate, emails, documents, images, research, coding or other, like /report settings emails 15.'
+  if (kind === undefined) return 'Change rate, emails, documents, images, artifacts, research, coding or other, like /report settings emails 15.'
   if (n > 1440) return 'Minutes a task is a number from 0 to 1440.'
   return { ...settings, minutes: { ...settings.minutes, [kind]: n } }
 }

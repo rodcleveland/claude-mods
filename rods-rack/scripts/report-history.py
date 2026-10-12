@@ -23,17 +23,77 @@ from datetime import datetime
 
 PROJECTS = os.path.expanduser("~/.claude/projects")
 OUT = os.path.expanduser("~/.claude/rods-rack-data/report-history.json")
-KINDS = ["emails", "documents", "media", "research", "coding", "other"]
+KINDS = ["emails", "documents", "media", "artifacts", "research", "coding", "other"]
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 # The same rules as classify() in hooks/report-logic.ts.
 MAIL = re.compile(r"gmail|outlook|email|_mail|mail_", re.I)
-MEDIA_TOOL = re.compile(r"image|video|openart|higgsfield|photo|thumbnail|gif|nano.?banana|generate_image", re.I)
+MEDIA_TOOL = re.compile(r"image|video|openart|higgsfield|photo|thumbnail|gif|nano.?banana|generate_image|^generate$", re.I)
+BROWSER = re.compile(r"claude-in-chrome|chrome-browser|agent-browser|browser_", re.I)
 MEDIA_FILE = re.compile(r"\.(png|jpe?g|gif|webp|heic|svg|mp4|mov|webm|m4v|avi|mkv)$", re.I)
 DOC_TOOL = re.compile(r"docx|pptx|xlsx|\bpdf\b|_pdf|pdf_|slides?|spreadsheet|sheets?|claude_docs|google_drive|documents?|word", re.I)
+ARTIFACT_TOOL = re.compile(r"artifact", re.I)
 DOC_FILE = re.compile(r"\.(docx?|pptx?|xlsx?|pdf|odt|rtf|key|pages)$", re.I)
 CODE_COMMAND = re.compile(r"\b(git (commit|push|merge|rebase|checkout|switch)|npm (run|test|install|ci)|npx|pnpm|yarn|bun|pytest|jest|vitest|tsc|cargo|go (build|test|run)|dotnet|msbuild|gradle|mvn|make|claude plugin (test|validate))\b")
-RESEARCH = re.compile(r"websearch|webfetch|web_search|fetch|search_web|transcript|youtube|yt-dlp|context7|scrape|deep-research|research", re.I)
+RESEARCH = re.compile(r"websearch|webfetch|web_search|fetch|search_web|transcript|youtube|yt-dlp|context7|scrape|deep-research|research|claude-in-chrome|chrome-browser|agent-browser|browser_", re.I)
+DOWNLOAD = re.compile(r"yt-dlp|\b(curl|wget)\b[^|;&\n]*https?://")
+
+# The same shell rule as writesOutsideTmp() in hooks/report-logic.ts.
+SCRIPT_WRITE = re.compile(r"""\b(python3?|node)\b[\s\S]*(open\([^)]*['"][wax]\+?['"]|write_text|\.write\(|writeFileSync|json\.dump)""")
+QUOTED_PATH = re.compile(r"""['"]((?:~|\.{1,2})?/?[\w.@~-]+(?:/[\w.@~-]+)*\.[A-Za-z]\w{0,5}|/[\w.@~-]+(?:/[\w.@~-]+)+)['"]""")
+
+
+def words(segment):
+    return [re.sub(r"""^['"]|['"]$""", "", w) for w in re.findall(r""""[^"]*"|'[^']*'|\S+""", segment)]
+
+
+def shell_targets(line):
+    out = []
+    for segment in re.split(r"&&|\|\||;|\|", line):
+        ws = words(segment.strip())
+        for i, w in enumerate(ws):
+            if w in (">", ">>"):
+                out.append(ws[i + 1] if i + 1 < len(ws) else "")
+            elif re.match(r"^>>?[^>&]", w):
+                out.append(re.sub(r"^>>?", "", w))
+        args = [w for w in ws if not re.match(r"^\w+=", w)]
+        cmd = args[0] if args else ""
+        rest = [w for w in args[1:] if not w.startswith("-") and not w.startswith(">") and not re.match(r"^\d?>", w)]
+        if cmd in ("tee", "rm", "mkdir", "touch"):
+            out += rest
+        elif cmd in ("cp", "mv") and len(rest) > 1:
+            out.append(rest[-1])
+        elif cmd == "sed" and any(re.match(r"^-i", a) for a in args) and rest:
+            out.append(rest[-1])
+    return [p for p in out if p]
+
+
+def writes_outside_tmp(command):
+    """True when a shell command changed a file outside /tmp."""
+    env = {}
+    for m in re.finditer(r"""(?:^|[\s;&])([A-Za-z_]\w*)=("([^"]*)"|'([^']*)'|([^\s;&]+))""", command):
+        env[m.group(1)] = next((g for g in (m.group(3), m.group(4), m.group(5)) if g is not None), "")
+    text = re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: env.get(m.group(1), m.group(0)), command)
+    cd = re.search(r"""(?:^|[\s;&(])cd\s+("([^"]+)"|'([^']+)'|([^\s;&|]+))""", text)
+    cwd = "" if cd is None else next((g for g in (cd.group(2), cd.group(3), cd.group(4)) if g is not None), "")
+
+    targets, heredoc = [], None
+    for line in text.split("\n"):
+        if heredoc is not None:
+            if line.strip() == heredoc:
+                heredoc = None
+            continue
+        targets += shell_targets(line)
+        opens = re.search(r"""<<-?\s*['"]?(\w+)['"]?""", line)
+        if opens:
+            heredoc = opens.group(1)
+    if SCRIPT_WRITE.search(text):
+        targets += [m.group(1) for m in QUOTED_PATH.finditer(text)]
+
+    def is_tmp(p):
+        return p.startswith("/tmp/") or p == "/tmp" or (not p.startswith("/") and not p.startswith("~") and (cwd.startswith("/tmp/") or cwd == "/tmp"))
+
+    return any(not p.startswith("/dev/") and not re.match(r"^\w+://", p) and not is_tmp(p) for p in targets)
 
 
 def signals_of(block):
@@ -48,7 +108,7 @@ def signals_of(block):
     if isinstance(inp.get("skill"), str):
         out.append(("tool", inp["skill"]))
     if isinstance(inp.get("command"), str):
-        out.append(("bash", inp["command"][:300]))
+        out.append(("bash", inp["command"][:4000]))
     return out
 
 
@@ -58,13 +118,15 @@ def classify(signals):
     commands = [v for k, v in signals if k == "bash"]
     if any(MAIL.search(t) for t in tools):
         return "emails"
-    if any(MEDIA_TOOL.search(t) for t in tools) or any(MEDIA_FILE.search(f) for f in files):
+    if any(MEDIA_TOOL.search(t) and not BROWSER.search(t) for t in tools) or any(MEDIA_FILE.search(f) for f in files):
         return "media"
     if any(DOC_TOOL.search(t) for t in tools) or any(DOC_FILE.search(f) for f in files):
         return "documents"
-    if files or any(CODE_COMMAND.search(c) for c in commands):
+    if any(ARTIFACT_TOOL.search(t) for t in tools):
+        return "artifacts"
+    if files or any(CODE_COMMAND.search(c) or writes_outside_tmp(c) for c in commands):
         return "coding"
-    if any(RESEARCH.search(t) for t in tools) or any(re.search(r"yt-dlp|curl\s+https?:", c) for c in commands):
+    if any(RESEARCH.search(t) for t in tools) or any(DOWNLOAD.search(c) for c in commands):
         return "research"
     return "other"
 

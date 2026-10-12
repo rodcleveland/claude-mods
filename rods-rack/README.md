@@ -124,14 +124,19 @@ through today) tabs.
 - **Open it**: `/report`, the `◆ Report` chip in the footer, or ▤ Work Report in the panel.
 - **What counts**: one prompt you typed that ends with an answer is one task. Helper agents, tool
   steps, cancelled turns, slash commands, plugin prompts and messages sent mid-turn do not count.
-- **Kinds**: Emails (any mail tool), Images and video (image or video tools, or an image or video
-  file written), Documents (document, slide or spreadsheet tools, or a document file written),
-  Coding (any other file written, or a build, test or git command), Research (web search, page
-  reading, transcripts) and Other, decided by the tools the request and its helpers used, in that
-  order. Coding outranks Research, so looking up docs while coding is coding. A file only read (a
-  screenshot looked at while debugging) does not count.
-- **The estimate**: minutes saved per task (Emails 10, Documents 30, Images and video 20, Research
-  25, Coding 20, Other 10) at $50 an hour. `/report settings` lists them; `/report settings rate 75` or
+- **Kinds**: Emails (any mail tool), Images and video (image or video tools or the `generate`
+  skill, or an image or video file written), Documents (document, slide or spreadsheet tools, or a
+  document file written), Artifacts (published pages, dashboards and apps: the Artifact tools),
+  Coding (any other file written; a build, test or git command;
+  or a shell edit or script that changed a file outside `/tmp`), Research (web search, page reading,
+  browser automation, transcripts, `curl` or `wget` downloads) and Other, decided by the tools the
+  request and its helpers used, in that order. Artifacts outrank Coding, so building a page that
+  gets published counts as Artifacts; Coding outranks Research, so looking up docs while coding is
+  coding. A file only read (a screenshot looked at while debugging) does not count. Other
+  is what is left: answers with no tools, read-only investigation, and coordination tools such as
+  AskUserQuestion and SendMessage.
+- **The estimate**: minutes saved per task (Emails 10, Documents 30, Images and video 20, Artifacts
+  30, Research 25, Coding 20, Other 10) at $50 an hour. `/report settings` lists them; `/report settings rate 75` or
   `/report settings emails 15` changes one. Hours and dollars are always labelled as estimates.
 - **Saved data**: one record per calendar day in Rods Rack's store (`report:day:YYYY-MM-DD`), plus
   the settings. Days are your local dates, read from the system clock and stepped at noon.
