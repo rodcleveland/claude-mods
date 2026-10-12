@@ -2,7 +2,6 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput } from 'claude-code'
 
 import type {
-  RackAgent,
   RackEffort,
   RackFamily,
   RackHelper,
@@ -10,8 +9,10 @@ import type {
   RackSeen,
   RackUpgrade,
 } from '../types'
-import { familyFor, guessLevel, isShortReply, parseLevel, SORT_SYSTEM } from './auto-model'
+import { autoStatusText, familyFor, guessLevel, isShortReply, parseLevel, SORT_SYSTEM } from './auto-model'
 import { registerCleanView } from './clean-view'
+import { DOCK_PANE, registerDock } from './dock'
+import { badge, composeStatus, HELPER_OPTIONS, IDLE_MISSION, isBigTeam, SIZES } from './dock-logic'
 
 // Edit this to change what "Create photo or video" asks for.
 export const CREATE_PROMPT =
@@ -25,7 +26,8 @@ const UPGRADE_SYSTEM =
   'Keep the user\'s intent and every constraint, file name, value and instruction they stated. ' +
   'Do not add requirements they did not ask for. Reply with the rewritten prompt only.'
 
-const DOCK = 'rods-rack-dock'
+const DOCK_SIZE_KEY = 'dockSize'
+const DOCK_NARROW = 'The window is too narrow to show the Agent Dock. Widen it or watch the status bar.'
 const STORE_KEY = 'prefs'
 const CLEAN_VIEW_KEY = 'cleanView'
 const UPGRADE_TIMEOUT_MS = 5000
@@ -55,11 +57,6 @@ const EFFORTS: ReadonlyArray<{ value: RackEffort; label: string }> = [
   { value: 'xhigh', label: 'XHigh' },
   { value: 'max', label: 'Max' },
 ]
-const HELPERS: ReadonlyArray<{ value: RackHelper; label: string; alias: 'haiku' | 'sonnet' | null }> = [
-  { value: 'fast', label: 'Fast & Cheap', alias: 'haiku' },
-  { value: 'balanced', label: 'Balanced', alias: 'sonnet' },
-  { value: 'same', label: 'Same as main', alias: null },
-]
 
 const DEFAULT_PREFS: RackPrefs = {
   model: null,
@@ -74,11 +71,15 @@ const DEFAULT_PREFS: RackPrefs = {
 const prefs = atom({ plugin: 'rods-rack', key: 'prefs' } as const, DEFAULT_PREFS)
 const panelOpen = atom({ plugin: 'rods-rack', key: 'panelOpen' } as const, false)
 const seen = atom({ plugin: 'rods-rack', key: 'seen' } as const, { model: null, effort: null } as RackSeen)
-const agents = atom({ plugin: 'rods-rack', key: 'agents' } as const, {} as Record<string, RackAgent>)
 // Owned by Clean View (clean-view.tsx); the panel's switch writes the same value.
 const cleanViewEnabled = atom({ plugin: 'rods-rack', key: 'cleanViewEnabled' } as const, true)
 const lastUpgrade = atom({ plugin: 'rods-rack', key: 'lastUpgrade' } as const, null as RackUpgrade | null)
-const dockTick = atom({ plugin: 'rods-rack', key: 'dockTick' } as const, 0)
+// Owned by the Agent Dock (dock.tsx); the panel's Team size row and its launcher write the same values.
+const dockSize = atom({ plugin: 'rods-rack', key: 'dockSize' } as const, 1)
+const dockPending = atom({ plugin: 'rods-rack', key: 'dockPending' } as const, null as number | null)
+const dockCustomOpen = atom({ plugin: 'rods-rack', key: 'dockCustomOpen' } as const, false)
+const dockFolded = atom({ plugin: 'rods-rack', key: 'dockFolded' } as const, false)
+const dockMission = atom({ plugin: 'rods-rack', key: 'dockMission' } as const, IDLE_MISSION)
 // Written by Clean View's turn.start and turn.complete (clean-view.tsx).
 const isWorking = atom({ plugin: 'rods-rack', key: 'isWorking' } as const, false)
 
@@ -107,9 +108,12 @@ async function setPrefs($: Dollar, change: (p: RackPrefs) => RackPrefs) {
 
 const labelOf = (family: RackFamily | null) => MODELS.find(m => m.family === family)?.label ?? 'Default'
 
-// The status line is Auto Model's one sign on screen: the model it picked, or nothing while off.
-function showAutoStatus($: Dollar, p: RackPrefs) {
-  $.ui.status(p.autoModel ? `Auto · ${p.model === null ? 'waiting for a prompt' : labelOf(p.model)}` : undefined)
+// Rods Rack's one status line: Auto Model's pick (its one sign on screen), and the Agent Dock's
+// badge while the dock is folded.
+async function showAutoStatus($: Dollar, p: RackPrefs) {
+  const isFolded = await read($, dockFolded)
+  const mission = await read($, dockMission)
+  $.ui.status(composeStatus(autoStatusText(p.autoModel, p.model), isFolded ? badge(mission) : null))
 }
 
 // On: remember the model in use to go back to. Off: go back to it.
@@ -119,14 +123,14 @@ async function setAutoModel($: Dollar, isOn: boolean) {
     return isOn ? { ...p, autoModel: true, autoPrevious: p.model } : { ...p, autoModel: false, model: p.autoPrevious, autoPrevious: null }
   })
   await $.store.set(STORE_KEY, next)
-  showAutoStatus($, next)
+  await showAutoStatus($, next)
 }
 
 // A model picked by hand wins: Auto Model turns off and stays out of its way.
 async function pickModelByHand($: Dollar, family: RackFamily | null) {
   const next = await update($, prefs, p => ({ ...p, model: family, autoModel: false, autoPrevious: null }))
   await $.store.set(STORE_KEY, next)
-  showAutoStatus($, next)
+  await showAutoStatus($, next)
 }
 
 // The model line for a prompt: the smallest model sorts it, the words decide if it cannot.
@@ -169,12 +173,28 @@ async function togglePanel($: Dollar) {
   await update($, panelOpen, isOpen => !isOpen)
 }
 
-let dockTimer: { cancel: () => void } | null = null
-
+// The Agent Dock's pane, opened from the panel's launcher or its Team size row (a press, so asked).
 async function openDock($: Dollar) {
-  await $.ui.open({ id: DOCK, title: 'Agent Dock' })
-  if (dockTimer === null) {
-    dockTimer = $.clock.every(2000, () => void update($, dockTick, n => n + 1))
+  const opened = await $.ui.open({ id: DOCK_PANE, title: 'Agent Dock', columns: 80 })
+  if (!opened.isPlaced) $.ui.toast(DOCK_NARROW)
+  await update($, dockFolded, () => false)
+  await showAutoStatus($, await read($, prefs))
+}
+
+// The panel's Team size row: up to 20 is set at once; a big team, or Custom, finishes in the dock.
+async function pickTeamSize($: Dollar, size: number | 'custom') {
+  if (size === 'custom') {
+    await update($, dockPending, () => null)
+    await update($, dockCustomOpen, () => true)
+    await openDock($)
+  } else if (isBigTeam(size)) {
+    await update($, dockCustomOpen, () => false)
+    await update($, dockPending, () => size)
+    await openDock($)
+  } else {
+    await update($, dockSize, () => size)
+    await update($, dockPending, () => null)
+    await $.store.set(DOCK_SIZE_KEY, size)
   }
 }
 
@@ -183,12 +203,6 @@ const spaced = (text: string) => text.split(' ').map(word => word.split('').join
 const rule = (label: string, width: number) => {
   const head = `── ${spaced(label)} `
   return head + '─'.repeat(Math.max(2, width - head.length))
-}
-
-function elapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000))
-  const minutes = Math.floor(seconds / 60)
-  return minutes > 0 ? `${minutes}m ${seconds % 60}s` : `${seconds}s`
 }
 
 // The panel's body: model, effort, settings and launchers, in a bordered box at the band's right edge.
@@ -206,7 +220,9 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
   const activeEffort = p.effort ?? s.effort
   const modelLabel = MODELS.find(m => m.family === activeFamily)?.label ?? s.model ?? 'Default'
   const effortLabel = EFFORTS.find(x => x.value === activeEffort)?.label ?? 'Default'
-  const helper = HELPERS.find(h => h.value === p.helper) ?? HELPERS[0]!
+  const helper = HELPER_OPTIONS.find(h => h.value === p.helper) ?? HELPER_OPTIONS[0]!
+  const teamSize = await read($, dockSize)
+  const isCustomTeam = !SIZES.includes(teamSize as (typeof SIZES)[number])
 
   const heading = (label: string) =>
     isTerminal ? <Text color={ORANGE}>{rule(label, width)}</Text> : <Text bold color={ORANGE}>{label}</Text>
@@ -274,12 +290,24 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
           plain
           onPress={() =>
             void setPrefs($, x => {
-              const at = HELPERS.findIndex(h => h.value === x.helper)
-              return { ...x, helper: HELPERS[(at + 1) % HELPERS.length]!.value }
+              const at = HELPER_OPTIONS.findIndex(h => h.value === x.helper)
+              return { ...x, helper: HELPER_OPTIONS[(at + 1) % HELPER_OPTIONS.length]!.value }
             })
           }
         >
           <Text>[{helper.label} ▸]</Text>
+        </Button>
+      </Box>
+      <Box flexDirection="row" flexWrap="wrap">
+        <Text color={teamSize > 1 ? 'green' : undefined}>{teamSize > 1 ? '● ' : '○ '}</Text>
+        <Box width={16}><Text color="white">Team size</Text></Box>
+        {SIZES.map(n => (
+          <Button key={`team-${n}`} plain onPress={() => void pickTeamSize($, n)}>
+            {n === teamSize ? <Text color={INK} backgroundColor={ORANGE}> {n} </Text> : <Text> {n} </Text>}
+          </Button>
+        ))}
+        <Button key="team-custom" plain onPress={() => void pickTeamSize($, 'custom')}>
+          {isCustomTeam ? <Text color={INK} backgroundColor={ORANGE}> {teamSize} </Text> : <Text dimColor> Custom </Text>}
         </Button>
       </Box>
       <Box flexDirection="row">
@@ -327,6 +355,8 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
 }
 
 export const register: Register = on => {
+  // The dock first, so its hooks sit above Clean View's.
+  registerDock(on)
   registerCleanView(on)
 
   on('session.start', async ($, e, next) => {
@@ -344,7 +374,7 @@ export const register: Register = on => {
       argumentHint: 'on|off|status',
       immediate: true,
     })
-    showAutoStatus($, await read($, prefs))
+    await showAutoStatus($, await read($, prefs))
 
     return next(e)
   })
@@ -402,14 +432,6 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  on('ui.close', async ($, e, next) => {
-    if (e.id === DOCK && dockTimer !== null) {
-      dockTimer.cancel()
-      dockTimer = null
-    }
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
   // The chips at the right end of the prompt footer, beside any mode labels: Auto Model's switch,
   // then the panel's.
   on('ui.render', { component: 'SessionMode' }, async ($, e) => {
@@ -449,44 +471,10 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: DOCK }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    await read($, dockTick)
-    const tracked = await read($, agents)
-    const list = await $.agent.list()
-    const now = await $.clock.now()
-
-    return (
-      <Box flexDirection="column">
-        <Text bold color={ORANGE}>◆ Agent Dock</Text>
-        {list.length === 0 && <Text dimColor>No subagents in this session yet.</Text>}
-        {list.map(agent => {
-          const info = tracked[agent.id]
-          const isLive = agent.status === 'running' || agent.status === 'pending' || agent.status === 'waiting'
-          return (
-            <Box flexDirection="row" gap={2}>
-              <Text color={isLive ? 'green' : 'gray'}>{agent.status.padEnd(9)}</Text>
-              <Box flexGrow={1}><Text wrap="truncate-end">{agent.description || agent.type}</Text></Box>
-              <Text dimColor>{info ? (familyOf(info.model) ?? info.model) : '—'}</Text>
-              <Text dimColor>{info && isLive ? elapsed(now - info.startedAt) : '—'}</Text>
-            </Box>
-          )
-        })}
-      </Box>
-    )
-  })
-
   // Model and effort: no session setter exists, so each main-loop request is rewritten.
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId !== undefined) {
-      const known = await read($, agents)
-      if (known[e.agentId] === undefined) {
-        const startedAt = await $.clock.now()
-        const id = e.agentId
-        await update($, agents, all => ({ ...all, [id]: { model: e.model, startedAt } }))
-      }
-      return yield* next(e)
-    }
+    // Helper agents keep their own model; only the main conversation's requests are rewritten.
+    if (e.agentId !== undefined) return yield* next(e)
 
     const s = await read($, seen)
     const effort = e.effort === undefined ? null : String(e.effort)
@@ -523,7 +511,7 @@ export const register: Register = on => {
     if (family !== null) {
       const picked = await update($, prefs, x => (x.autoModel ? { ...x, model: family } : x))
       await $.store.set(STORE_KEY, picked)
-      showAutoStatus($, picked)
+      await showAutoStatus($, picked)
     }
     if (upgraded === '') return next(e)
 
@@ -532,11 +520,4 @@ export const register: Register = on => {
     return next({ ...e, text: upgraded })
   }).catch(($, e, next) => next(e))
 
-  // Helper agents: point the Agent tool at the chosen model.
-  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
-    const p = await read($, prefs)
-    const alias = HELPERS.find(h => h.value === p.helper)?.alias ?? null
-    if (alias === null || e.subagent_type === 'fork') return next(e)
-    return next({ ...e, model: alias })
-  }).catch(($, e, next) => next(e))
 }

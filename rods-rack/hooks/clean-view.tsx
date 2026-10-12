@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderElement, RenderInput } from 'claude-code'
 
 import type { CleanChecklist, CleanPhase, CleanTask } from '../types'
+import { applyHelperProgress, HELPER_PLAN_ANSWER, IDLE_MISSION } from './dock-logic'
 
 // Clean View: tool rows hidden while Claude works, and one plain checklist above the prompt
 // showing the plan, the step under way and how far along it is.
@@ -72,6 +73,8 @@ const IDLE: CleanChecklist = {
 const cleanViewEnabled = atom({ plugin: 'rods-rack', key: 'cleanViewEnabled' } as const, true)
 const checklist = atom({ plugin: 'rods-rack', key: 'checklist' } as const, IDLE)
 const tick = atom({ plugin: 'rods-rack', key: 'tick' } as const, 0)
+// The Agent Dock's mission (dock.tsx): a helper's report moves its card.
+const dockMission = atom({ plugin: 'rods-rack', key: 'dockMission' } as const, IDLE_MISSION)
 // Whether a main-conversation turn is running, whatever Clean View's switch; Auto Model reads it.
 const isWorking = atom({ plugin: 'rods-rack', key: 'isWorking' } as const, false)
 
@@ -545,6 +548,8 @@ export function registerCleanView(on: On) {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: PLAN_TOOL }, async ($, e) => {
+    // A helper agent's plan is the dock's card, not the checklist.
+    if (e.agentId !== undefined) return { result: HELPER_PLAN_ANSWER }
     const steps = Array.isArray(e.steps) ? e.steps.filter((s): s is string => typeof s === 'string') : []
     if (steps.length === 0) return { deny: 'plan_steps needs steps: a list of 2 to 8 short step names.' }
     if (e.agentId === undefined) {
@@ -563,6 +568,12 @@ export function registerCleanView(on: On) {
     const percent = clamp(typeof e.percent === 'number' ? e.percent : Number(e.percent))
     if (e.agentId === undefined && typeof e.task === 'string') {
       await changeOpen($, c => reportProgress(c, e.task as string, percent))
+    } else if (e.agentId !== undefined) {
+      // A helper agent's report moves its card in the Agent Dock, found by its description.
+      const agentId = e.agentId
+      const description = (await $.agent.list()).find(a => a.id === agentId)?.description ?? null
+      const task = typeof e.task === 'string' ? e.task : ''
+      await update($, dockMission, m => applyHelperProgress(m, { agentId, description, task, percent }))
     }
     return { result: `Progress noted: ${percent}%.` }
   }).catch(() => ({ result: 'Progress noted.' }))

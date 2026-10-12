@@ -16,7 +16,6 @@ export type RackPrefs = {
 }
 
 export type RackSeen = { model: string | null; effort: string | null }
-export type RackAgent = { model: string; startedAt: number }
 export type RackUpgrade = { original: string; upgraded: string }
 
 export type CleanTaskStatus = 'done' | 'active' | 'upcoming'
@@ -50,15 +49,51 @@ export type CleanChecklist = {
   isCollapsed: boolean
 }
 
+export type DockCardStatus = 'queued' | 'working' | 'done' | 'stuck'
+
+// One helper agent's card: keyed by the Agent call's tool_use id; agentId once its reports name it.
+export type DockCard = {
+  id: string
+  name: string
+  agentId: string | null
+  status: DockCardStatus
+  percent: number
+  hasReported: boolean
+  startedAt: number | null
+  finishedAt: number | null
+}
+
+// idle: standing by. live: helpers are queued or working. done: the summary line.
+export type DockPhase = 'idle' | 'live' | 'done'
+
+export type DockMission = {
+  id: number
+  name: string
+  phase: DockPhase
+  // The Team Size the request was sent at, whether it carried the split instruction, how many
+  // Agent calls were let through, and whether the one nudge was sent.
+  size: number
+  wantsSplit: boolean
+  admitted: number
+  nudged: boolean
+  cards: DockCard[]
+  startedAt: number | null
+  finishedAt: number | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'rods-rack': {
       prefs: RackPrefs
       panelOpen: boolean
       seen: RackSeen
-      agents: Record<string, RackAgent>
       lastUpgrade: RackUpgrade | null
-      dockTick: number
+      dockSize: number
+      dockPending: number | null
+      dockCustomOpen: boolean
+      dockMission: DockMission
+      dockFrame: number
+      dockFolded: boolean
       cleanViewEnabled: boolean
       checklist: CleanChecklist
       tick: number

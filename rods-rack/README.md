@@ -10,9 +10,12 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
   rewrite fails or takes longer than 5 seconds, your original is sent unchanged.
 - **Auto Model**: picks the model for each new prompt you type (see below). Also the gold
   `Auto Model: On` / slate `Auto Model: Off` chip in the footer, and `/automodel`.
-- **Helper agents**: the model subagents use (Fast & Cheap → Haiku, Balanced → Sonnet, Same as main).
+- **Helper agents**: the model subagents use (Fast & Cheap → Haiku, Balanced → Sonnet, Same as main),
+  when Claude does not name one on the Agent call.
+- **Team size**: how many helper agents each request is split across (1, 3, 5, 10, 20, 50, 100 or
+  Custom). The same setting as the Agent Dock's (see below).
 - **Launch**: *Create photo or video* (edit `CREATE_PROMPT` in `hooks/register.tsx`) and the
-  **Agent Dock**, a pane listing subagents with status, model and elapsed time.
+  **Agent Dock**.
 
 Your choices are saved and come back in new sessions and after `/clear`, `/resume` and `/branch`.
 
@@ -84,6 +87,34 @@ into one of four levels, and the main conversation runs on that level's model:
 - The four models are a constant (`MODELS` in `hooks/register.tsx`): this build exposes no model list.
   The sorting rules, short-reply check and word guess are in `hooks/auto-model.ts`.
 
+## Agent Dock
+
+Pick a **Team Size**, and every request you send is split across that many helper agents running
+in parallel, with a pane that shows each helper as a card.
+
+- **Open or fold it**: `/dock`, or ◆ Agent Dock in the Rods Rack panel. Folded, a busy dock shows as
+  `12 working · 8 queued · 30 done` in the status line. `/dock` again reopens it. It docks beside the
+  transcript in the fullscreen layout; if the window is too narrow it says so in a toast.
+- **Set the size**: `/dock 10`, the dock's Team Size row, or the panel's Team size row. Custom asks
+  "How many helpers?" (1 to 100). Above 20 the dock asks first ("Big team: this uses your plan
+  quickly. Continue?"), and a big team goes back to 1 in the next session. At 1, Claude decides.
+- **What Claude is told**: above size 1, each typed request (not a short reply, a slash command or a
+  message sent mid-turn) carries an instruction to split it into exactly N helpers, launched in one
+  message, each reporting its progress with `report_progress`. Agent calls past N are refused. A
+  request that used fewer gets one follow-up asking for the rest. Claude can still launch fewer; the
+  dock shows the real count.
+- **Queueing**: helpers past the engine's limit wait in the dock rather than being refused. "At a
+  time" is the lower of `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (20 if unset) and
+  `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` (10 if unset). Esc stops the waiting ones.
+- **The pane**: the mission (the request's first clause), its percent and time, one bar (done a
+  coral-to-gold sweep, working green, the rest a hairline), counts, and a card per helper with an
+  initials badge, its task, a timer and a meter. Above 12 helpers, a strip of seats and a "working
+  now" list. When all finish: "N agents finished <job> in 2m 14s". The clock runs only while helpers
+  are live.
+- **Costs**: each helper is a full agent. 50 helpers is roughly 50 agents' worth of usage per
+  request, plus one follow-up round if Claude used fewer. Fast & Cheap runs them on Haiku.
+- The plain logic is in `hooks/dock-logic.ts`; the pane and hooks in `hooks/dock.tsx`.
+
 ## Install
 
 At the prompt of a terminal Claude Code session (2.1.275 or later):
@@ -137,10 +168,8 @@ Hooks:
 - `command.run` on `automodel`: Auto Model on, off and status.
 - `classic.PostModelSwitch`: a model picked with `/model` or the picker turns Auto Model off.
 - `classic.StopFailure` on `model_not_found`: Auto Model steps down past that model.
-- `ui.close`: stop the Agent Dock's timer.
 - `ui.render` on `SessionMode`: the footer chips (Auto Model, then Rods Rack).
 - `ui.render` on `AbovePrompt`: the control panel, below whatever else the band draws.
-- `ui.render` on `Pane` `rods-rack-dock`: the Agent Dock.
 
 Clean View's hooks live in `hooks/clean-view.tsx` (`registerCleanView(on)`):
 
@@ -158,11 +187,23 @@ Clean View's hooks live in `hooks/clean-view.tsx` (`registerCleanView(on)`):
 - `turn.complete`: mark the turn over; Stopped, Stuck, waiting for your reply, or All done.
 - `ui.render` on `AbovePrompt`: the checklist and its button, on top of the band.
 - `ui.render` on `ToolUse`, `ToolResult` and `ToolGroup` (hidden) and `ToolProgress` (hint blanked).
-- `turn.step`: apply model and effort, and record each subagent's model and start time.
+- `turn.step`: apply model and effort to the main conversation's requests.
 - `prompt.submit`: Prompt Upgrade and Auto Model's pick, side by side.
-- `tool.call` on `Agent`: Helper agents.
+
+The Agent Dock's hooks live in `hooks/dock.tsx` (`registerDock(on)`, registered first):
+
+- `session.start`: restore the Team Size (a big team goes back to 1), register `/dock`.
+- `command.run` on `dock`: open or fold the pane, or set the size; it answers at once.
+- `ui.render` on `Pane` `rods-rack-dock`: the dock.
+- `prompt.submit`: start a mission; above size 1, add the split instruction as context.
+- `session.append` on `response`: queued cards as soon as Claude writes its Agent calls.
+- `tool.call` on `Agent`: the helper model, the Team Size cap, the wait for a slot, the card's state.
+- `turn.complete`: one nudge if the request used fewer helpers, else the summary.
+
+Clean View's `tool.call` hooks on `plan_steps` and `report_progress` pass a helper's calls to the
+dock: its plan is skipped and its report moves its card.
 
 `$` calls: `$.agent.list`, `$.clock.after`, `$.clock.every`, `$.clock.now`, `$.command.register`,
 `$.model.complete`, `$.prompt.submit`, `$.state.get`, `$.state.set`, `$.store.get`, `$.store.set`,
-`$.tool.register`, `$.ui.invalidate`, `$.ui.log`, `$.ui.open`, `$.ui.resolve`, `$.ui.status`,
-`$.ui.toast`.
+`$.env.get`, `$.process.run`, `$.tool.register`, `$.ui.close`, `$.ui.invalidate`, `$.ui.log`,
+`$.ui.open`, `$.ui.panes`, `$.ui.resolve`, `$.ui.status`, `$.ui.toast`.

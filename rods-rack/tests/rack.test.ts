@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
@@ -28,6 +28,8 @@ async function openPanel($: Engine, surface: 'terminal' | 'desktop') {
 function engine(on: On, initial: Record<string, unknown> = {}) {
   const store = new Map(Object.entries(initial))
   const writes: Array<{ key: string; value: unknown }> = []
+  mock.clock(on)
+  mock.env(on, {})
   on('classic.SessionStart', () => ({}) as never)
   // The engine's own empty band, drawn while the panel is closed.
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Box({}))

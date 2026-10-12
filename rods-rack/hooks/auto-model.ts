@@ -59,3 +59,17 @@ export function familyFor(level: RackAutoLevel, unavailable: readonly RackFamily
   const wanted = LEVEL_FAMILY[level]
   return STEP_DOWN.slice(STEP_DOWN.indexOf(wanted)).find(family => !unavailable.includes(family)) ?? 'haiku'
 }
+
+// Each model line's name, for the status line.
+export const FAMILY_LABELS: Readonly<Record<RackFamily, string>> = {
+  haiku: 'Haiku 5.5',
+  sonnet: 'Sonnet 5.5',
+  opus: 'Opus 5.5',
+  fable: 'Fable 5.1',
+}
+
+// Auto Model's status-line entry: the model it picked, or nothing while it is off.
+export function autoStatusText(isOn: boolean, model: RackFamily | null): string | null {
+  if (!isOn) return null
+  return `Auto · ${model === null ? 'waiting for a prompt' : FAMILY_LABELS[model]}`
+}

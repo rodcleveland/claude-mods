@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { familyFor, guessLevel, isShortReply, parseLevel } from '../hooks/auto-model'
@@ -20,6 +20,8 @@ function engine(on: On, initial: Record<string, unknown>, answer: string | null)
   const store = new Map(Object.entries(initial))
   const calls: string[] = []
   const status: Array<string | undefined> = []
+  mock.clock(on)
+  mock.env(on, {})
   on('classic.SessionStart', () => ({}) as never)
   on('classic.PostModelSwitch', () => ({}) as never)
   on('ui.status', ($, e) => {
