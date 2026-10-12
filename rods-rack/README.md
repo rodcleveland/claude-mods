@@ -1,13 +1,15 @@
 # Rods Rack
 
 A Claude Code mod that adds an orange `◆ Rods Rack ▾` chip to the right end of the prompt footer.
-Clicking the chip, or running `/tools` (or `/rack`), toggles a control panel for:
+Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control panel for:
 
 - **Model** and **effort** for the main conversation.
 - **Clean View**: tool calls, diffs and command output hidden, and a plain checklist of the job
   above the prompt (see below). The same switch as `/simple`.
 - **Prompt Upgrade**: your prompt is rewritten by Haiku to be clearer before it is sent. If the
   rewrite fails or takes longer than 5 seconds, your original is sent unchanged.
+- **Auto Model**: picks the model for each new prompt you type (see below). Also the gold
+  `Auto Model: On` / slate `Auto Model: Off` chip in the footer, and `/automodel`.
 - **Helper agents**: the model subagents use (Fast & Cheap → Haiku, Balanced → Sonnet, Same as main).
 - **Launch**: *Create photo or video* (edit `CREATE_PROMPT` in `hooks/register.tsx`) and the
   **Agent Dock**, a pane listing subagents with status, model and elapsed time.
@@ -49,6 +51,35 @@ hidden; Claude's written replies stay.
 - **For other mods**: the checklist is plugin state `rods-rack.checklist` (typed in
   `types/index.d.ts`), beside `rods-rack.cleanViewEnabled` and the animation's `rods-rack.tick`.
 
+## Auto Model
+
+While it is on, each new prompt you type is first sorted by Haiku (8 tokens, 4 seconds at most)
+into one of four levels, and the main conversation runs on that level's model:
+
+| Level | For | Model |
+| --- | --- | --- |
+| small | summarize, sort, extract, rename, translate, reformat, a short fact | Haiku 5.5 |
+| everyday | an email, a post, a short draft, a small edit, a one-file question | Sonnet 5.5 |
+| strong (default) | software, multi-step projects, research, analysis, planning | Opus 5.5 |
+| strongest | hours-long research, a very large build or migration | Fable 5.1 |
+
+- If the sort fails or times out, a guess from the prompt's words decides, strong when in doubt.
+- Never sorted, so the model stays: a short reply (under four words, or "ok", "keep going", "do it"),
+  a slash command, and a message sent while Claude is working. Helper agents keep their own models.
+- If a request comes back "model not found", Auto Model steps down past that model from the next
+  prompt on. The prompt that failed is not resent.
+- **Controls**: the panel row, the footer chip, `/automodel on`, `/automodel off`, `/automodel status`.
+  Turning it off puts back the model you had before. Picking a model by hand (the panel's Model row,
+  `/model` or the model picker) turns it off. The setting is saved across sessions.
+- **What you see**: only the status-line entry `Auto · <model>`. The session's own model name in your
+  status line does not change, because plugins cannot set the session's model; like the Model row,
+  Auto Model swaps the model on each main-conversation request.
+- **Costs**: one tiny Haiku call per sorted prompt. Substantial prompts go to Opus and the hardest
+  to Fable, which uses a plan's limits faster than working on Sonnet. With Prompt Upgrade on too,
+  the two Haiku calls run at the same time.
+- The four models are a constant (`MODELS` in `hooks/register.tsx`): this build exposes no model list.
+  The sorting rules, short-reply check and word guess are in `hooks/auto-model.ts`.
+
 ## Install
 
 At the prompt of a terminal Claude Code session (2.1.275 or later):
@@ -86,7 +117,7 @@ These choices differ from the original spec because this build's API has no equi
 | A footer/status-bar component | `SessionMode`, the mode labels at the right of the prompt footer. The chip is drawn there, after any existing labels. |
 | A floating panel | The band above the prompt (`AbovePrompt`). The panel is a bordered box pushed to the band's right edge. It steps aside while a survey holds the band. |
 | `[–]` outside the corner | Drawn by Claude Code beside every band tree; it collapses the band (also ctrl+x ctrl+a). Click the band or press ctrl+x tab to give it the keyboard. |
-| A keybinding | None exists for plugins. `/tools` and `/rack` are registered `immediate`, so they run mid-turn without starting a turn. |
+| A keybinding | None exists for plugins. `/tools` and `/rods-rack` are registered `immediate`, so they run mid-turn without starting a turn. |
 | A `$.session` / `$.model` setter | None exists. A `turn.step` hook rewrites each main-loop request's model and effort. Subagent requests are left alone. |
 | A list of available models | None is exposed. The four models are a constant (`MODELS`). |
 | Racing the upgrade with `$.clock.sleep` | `$.model.complete` takes `timeoutMs: 5000` and resolves `aborted` on timeout. A sleep would also count against the hook's own budget. |
@@ -95,11 +126,15 @@ These choices differ from the original spec because this build's API has no equi
 
 Hooks:
 
-- `session.start`: load saved settings, close the panel, register `/tools` and `/rack`.
+- `session.start`: load saved settings, close the panel, register `/tools`, `/rods-rack` and
+  `/automodel`, and show Auto Model's status entry.
 - `classic.SessionStart`: reload saved settings after `/clear`, `/resume` and `/branch`.
-- `command.run` on `tools` and `rack`: toggle the panel.
+- `command.run` on `tools` and `rods-rack`: toggle the panel.
+- `command.run` on `automodel`: Auto Model on, off and status.
+- `classic.PostModelSwitch`: a model picked with `/model` or the picker turns Auto Model off.
+- `classic.StopFailure` on `model_not_found`: Auto Model steps down past that model.
 - `ui.close`: stop the Agent Dock's timer.
-- `ui.render` on `SessionMode`: the footer chip.
+- `ui.render` on `SessionMode`: the footer chips (Auto Model, then Rods Rack).
 - `ui.render` on `AbovePrompt`: the control panel, below whatever else the band draws.
 - `ui.render` on `Pane` `rods-rack-dock`: the Agent Dock.
 
@@ -110,18 +145,20 @@ Clean View's hooks live in `hooks/clean-view.tsx` (`registerCleanView(on)`):
 - `classic.SessionStart` on `clear`: empty the checklist.
 - `command.run` on `simple`: the switch.
 - `prompt.compose`: the system-prompt section asking Claude to plan and report.
-- `turn.start`: start a job (placeholders, Haiku names it) or carry on the open one.
+- `turn.start`: mark a turn running (Auto Model reads it); start a job (placeholders, Haiku names
+  it) or carry on the open one.
 - `tool.call` on `plan_steps` and `report_progress`: fill the checklist.
 - `tool.call`: the plan gate; Needs you, Stuck and their clearing; TodoWrite and Task rows.
 - `classic.Notification`: permission prompts and questions become Needs you.
 - `classic.StopFailure`: an API error becomes one calm Stuck sentence.
-- `turn.complete`: Stopped, Stuck, waiting for your reply, or All done.
+- `turn.complete`: mark the turn over; Stopped, Stuck, waiting for your reply, or All done.
 - `ui.render` on `AbovePrompt`: the checklist and its button, on top of the band.
 - `ui.render` on `ToolUse`, `ToolResult` and `ToolGroup` (hidden) and `ToolProgress` (hint blanked).
 - `turn.step`: apply model and effort, and record each subagent's model and start time.
-- `prompt.submit`: Prompt Upgrade.
+- `prompt.submit`: Prompt Upgrade and Auto Model's pick, side by side.
 - `tool.call` on `Agent`: Helper agents.
 
 `$` calls: `$.agent.list`, `$.clock.after`, `$.clock.every`, `$.clock.now`, `$.command.register`,
 `$.model.complete`, `$.prompt.submit`, `$.state.get`, `$.state.set`, `$.store.get`, `$.store.set`,
-`$.tool.register`, `$.ui.invalidate`, `$.ui.log`, `$.ui.open`, `$.ui.resolve`, `$.ui.toast`.
+`$.tool.register`, `$.ui.invalidate`, `$.ui.log`, `$.ui.open`, `$.ui.resolve`, `$.ui.status`,
+`$.ui.toast`.

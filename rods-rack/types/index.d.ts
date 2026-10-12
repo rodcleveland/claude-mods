@@ -1,12 +1,18 @@
 export type RackFamily = 'haiku' | 'sonnet' | 'opus' | 'fable'
 export type RackEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type RackHelper = 'fast' | 'balanced' | 'same'
+export type RackAutoLevel = 'small' | 'everyday' | 'strong' | 'strongest'
 
 export type RackPrefs = {
   model: RackFamily | null
   effort: RackEffort | null
   promptUpgrade: boolean
   helper: RackHelper
+  // Auto Model: on or off, the model to go back to when it is turned off, and the model lines
+  // this plan refused, which it steps down past.
+  autoModel: boolean
+  autoPrevious: RackFamily | null
+  autoUnavailable: RackFamily[]
 }
 
 export type RackSeen = { model: string | null; effort: string | null }
@@ -56,6 +62,7 @@ declare module 'claude-code' {
       cleanViewEnabled: boolean
       checklist: CleanChecklist
       tick: number
+      isWorking: boolean
     }
   }
 }

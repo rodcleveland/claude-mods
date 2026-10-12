@@ -72,6 +72,8 @@ const IDLE: CleanChecklist = {
 const cleanViewEnabled = atom({ plugin: 'rods-rack', key: 'cleanViewEnabled' } as const, true)
 const checklist = atom({ plugin: 'rods-rack', key: 'checklist' } as const, IDLE)
 const tick = atom({ plugin: 'rods-rack', key: 'tick' } as const, 0)
+// Whether a main-conversation turn is running, whatever Clean View's switch; Auto Model reads it.
+const isWorking = atom({ plugin: 'rods-rack', key: 'isWorking' } as const, false)
 
 // ── Plain names ──────────────────────────────────────────────────────────────
 
@@ -452,8 +454,9 @@ export function registerCleanView(on: On) {
     const own = await drawCleanBand($, e)
     const below = await next(e)
     const { Box } = $.ui.resolve(e)
+    // The wrapper carries no size: the engine refuses its own node under a Box with a width.
     return (
-      <Box flexDirection="column" width={e.props.bodyColumns}>
+      <Box flexDirection="column">
         {own}
         {below}
       </Box>
@@ -466,7 +469,7 @@ export function registerCleanView(on: On) {
     const isOn = arg === '' ? !(await read($, cleanViewEnabled)) : arg === 'on'
     await setCleanView($, isOn)
     return { text: isOn ? 'Clean View is on.' : 'Clean View is off.' }
-  })
+  }).catch(() => ({ text: 'Clean View could not be switched just now. Try /simple again.' }))
 
   on('prompt.compose', async ($, e, next) => {
     const built = await next(e)
@@ -475,6 +478,7 @@ export function registerCleanView(on: On) {
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
+    await update($, isWorking, () => true)
     const text = e.text.trim()
     if (text === '' || text.startsWith('/') || !(await isLive($))) return next(e)
 
@@ -574,6 +578,7 @@ export function registerCleanView(on: On) {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
+    await update($, isWorking, () => false)
     const c = await read($, checklist)
     if (e.reason === 'aborted') {
       await finish($, 'stopped')

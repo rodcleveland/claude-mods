@@ -17,9 +17,9 @@ const BAND = {
   },
 } as const
 
-// Opens the panel as the person does with /rack, then draws the band it lives in.
+// Opens the panel as the person does with /rods-rack, then draws the band it lives in.
 async function openPanel($: Engine, surface: 'terminal' | 'desktop') {
-  await $.command.run({ command: 'rack', args: '' } as never)
+  await $.command.run({ command: 'rods-rack', args: '' } as never)
   return $.ui.mount({ ...BAND, surface })
 }
 

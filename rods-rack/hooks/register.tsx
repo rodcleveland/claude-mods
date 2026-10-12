@@ -10,6 +10,7 @@ import type {
   RackSeen,
   RackUpgrade,
 } from '../types'
+import { familyFor, guessLevel, isShortReply, parseLevel, SORT_SYSTEM } from './auto-model'
 import { registerCleanView } from './clean-view'
 
 // Edit this to change what "Create photo or video" asks for.
@@ -28,12 +29,19 @@ const DOCK = 'rods-rack-dock'
 const STORE_KEY = 'prefs'
 const CLEAN_VIEW_KEY = 'cleanView'
 const UPGRADE_TIMEOUT_MS = 5000
+const SORT_TIMEOUT_MS = 4000
+const SORT_MAX_TOKENS = 8
 
 const ORANGE = '#E8743B'
 const PURPLE = '#B07AA1'
 const INK = '#1a1a1a'
+// Auto Model's footer chip: gold while on, slate while off.
+const GOLD = '#F2C46D'
+const SLATE = '#262B33'
+const LIGHT = '#E6EDF3'
 
-// No model list is exposed to plugins on this build, so the panel's models are fixed here.
+// No model list is exposed to plugins on this build (2.1.296: no $.model.list, no session setter),
+// so the four current model lines are fixed here, smallest to most capable. Auto Model reads this too.
 const MODELS: ReadonlyArray<{ family: RackFamily; label: string; id: string }> = [
   { family: 'haiku', label: 'Haiku 5.5', id: 'claude-haiku-5-5' },
   { family: 'sonnet', label: 'Sonnet 5.5', id: 'claude-sonnet-5-5' },
@@ -58,6 +66,9 @@ const DEFAULT_PREFS: RackPrefs = {
   effort: null,
   promptUpgrade: false,
   helper: 'same',
+  autoModel: false,
+  autoPrevious: null,
+  autoUnavailable: [],
 }
 
 const prefs = atom({ plugin: 'rods-rack', key: 'prefs' } as const, DEFAULT_PREFS)
@@ -68,6 +79,8 @@ const agents = atom({ plugin: 'rods-rack', key: 'agents' } as const, {} as Recor
 const cleanViewEnabled = atom({ plugin: 'rods-rack', key: 'cleanViewEnabled' } as const, true)
 const lastUpgrade = atom({ plugin: 'rods-rack', key: 'lastUpgrade' } as const, null as RackUpgrade | null)
 const dockTick = atom({ plugin: 'rods-rack', key: 'dockTick' } as const, 0)
+// Written by Clean View's turn.start and turn.complete (clean-view.tsx).
+const isWorking = atom({ plugin: 'rods-rack', key: 'isWorking' } as const, false)
 
 type Dollar = EngineInterface
 
@@ -90,6 +103,54 @@ async function hydrate($: Dollar) {
 async function setPrefs($: Dollar, change: (p: RackPrefs) => RackPrefs) {
   const next = await update($, prefs, change)
   await $.store.set(STORE_KEY, next)
+}
+
+const labelOf = (family: RackFamily | null) => MODELS.find(m => m.family === family)?.label ?? 'Default'
+
+// The status line is Auto Model's one sign on screen: the model it picked, or nothing while off.
+function showAutoStatus($: Dollar, p: RackPrefs) {
+  $.ui.status(p.autoModel ? `Auto · ${p.model === null ? 'waiting for a prompt' : labelOf(p.model)}` : undefined)
+}
+
+// On: remember the model in use to go back to. Off: go back to it.
+async function setAutoModel($: Dollar, isOn: boolean) {
+  const next = await update($, prefs, p => {
+    if (p.autoModel === isOn) return p
+    return isOn ? { ...p, autoModel: true, autoPrevious: p.model } : { ...p, autoModel: false, model: p.autoPrevious, autoPrevious: null }
+  })
+  await $.store.set(STORE_KEY, next)
+  showAutoStatus($, next)
+}
+
+// A model picked by hand wins: Auto Model turns off and stays out of its way.
+async function pickModelByHand($: Dollar, family: RackFamily | null) {
+  const next = await update($, prefs, p => ({ ...p, model: family, autoModel: false, autoPrevious: null }))
+  await $.store.set(STORE_KEY, next)
+  showAutoStatus($, next)
+}
+
+// The model line for a prompt: the smallest model sorts it, the words decide if it cannot.
+async function pickFamily($: Dollar, text: string, unavailable: readonly RackFamily[]) {
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: SORT_SYSTEM,
+    prompt: text.slice(0, 4000),
+    maxTokens: SORT_MAX_TOKENS,
+    timeoutMs: SORT_TIMEOUT_MS,
+  })
+  const level = (reply.isAnswered ? parseLevel(reply.text) : null) ?? guessLevel(text)
+  return familyFor(level, unavailable)
+}
+
+async function upgradePrompt($: Dollar, text: string) {
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: UPGRADE_SYSTEM,
+    prompt: text,
+    maxTokens: 2000,
+    timeoutMs: UPGRADE_TIMEOUT_MS,
+  })
+  return reply.isAnswered ? reply.text.trim() : ''
 }
 
 // The panel is drawn in the band above the prompt while panelOpen is set; the write redraws it.
@@ -179,7 +240,7 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
             key={`model-${m.family}`}
             plain
             {...(m.family === activeFamily ? { autoFocus: true as const } : {})}
-            onPress={() => void setPrefs($, x => ({ ...x, model: m.family }))}
+            onPress={() => void pickModelByHand($, m.family)}
           >
             {chip(m.family === activeFamily, m.label, ORANGE)}
           </Button>
@@ -219,6 +280,14 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
           }
         >
           <Text>[{helper.label} ▸]</Text>
+        </Button>
+      </Box>
+      <Box flexDirection="row">
+        <Text color={p.autoModel ? 'green' : undefined}>{p.autoModel ? '● ' : '○ '}</Text>
+        <Box width={16}><Text color="white">Auto Model</Text></Box>
+        <Box flexGrow={1}><Text dimColor>model per prompt</Text></Box>
+        <Button key="toggle-auto-model" plain onPress={() => void setAutoModel($, !p.autoModel)}>
+          {p.autoModel ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
         </Button>
       </Box>
       {upgrade !== null && (
@@ -266,9 +335,16 @@ export const register: Register = on => {
     try {
       await $.command.register({ name: 'tools', description: 'Toggle the Rods Rack control panel', immediate: true })
     } catch {
-      // A built-in already owns /tools on this build; /rack still works.
+      // A built-in already owns /tools on this build; /rods-rack still works.
     }
-    await $.command.register({ name: 'rack', description: 'Toggle the Rods Rack control panel', immediate: true })
+    await $.command.register({ name: 'rods-rack', description: 'Toggle the Rods Rack control panel', immediate: true })
+    await $.command.register({
+      name: 'automodel',
+      description: 'Auto Model: pick the model for each new prompt (on | off | status)',
+      argumentHint: 'on|off|status',
+      immediate: true,
+    })
+    showAutoStatus($, await read($, prefs))
 
     return next(e)
   })
@@ -286,12 +362,45 @@ export const register: Register = on => {
   on('command.run', { command: 'tools' }, async $ => {
     await togglePanel($)
     return { text: '' }
-  })
+  }).catch(() => ({ text: 'The Rods Rack panel could not open just now. Try again.' }))
 
-  on('command.run', { command: 'rack' }, async $ => {
+  on('command.run', { command: 'rods-rack' }, async $ => {
     await togglePanel($)
     return { text: '' }
-  })
+  }).catch(() => ({ text: 'The Rods Rack panel could not open just now. Try again.' }))
+
+  on('command.run', { command: 'automodel' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
+    if (arg === 'on' || arg === 'off') {
+      await setAutoModel($, arg === 'on')
+      return { text: arg === 'on' ? 'Auto Model is on.' : 'Auto Model is off.' }
+    }
+    if (arg === 'status' || arg === '') {
+      const p = await read($, prefs)
+      if (!p.autoModel) return { text: 'Auto Model is off.' }
+      return { text: `Auto Model is on. The current pick is ${p.model === null ? 'not made yet' : labelOf(p.model)}.` }
+    }
+    return { text: 'Use /automodel on, /automodel off or /automodel status.' }
+  }).catch(() => ({ text: 'Auto Model could not be changed just now. Try /automodel again.' }))
+
+  // /model or the model picker is a pick by hand: Auto Model turns off, and the panel's own model
+  // choice is cleared so the session's new model is the one used.
+  on('classic.PostModelSwitch', async ($, e, next) => {
+    if ((e.source === 'command' || e.source === 'picker') && (await read($, prefs)).autoModel) {
+      await pickModelByHand($, null)
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A model this plan cannot use: Auto Model steps down past it from the next prompt on.
+  on('classic.StopFailure', { error: 'model_not_found' }, async ($, e, next) => {
+    const p = await read($, prefs)
+    const refused = p.model
+    if (p.autoModel && refused !== null && !p.autoUnavailable.includes(refused)) {
+      await setPrefs($, x => ({ ...x, autoUnavailable: [...x.autoUnavailable, refused] }))
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('ui.close', async ($, e, next) => {
     if (e.id === DOCK && dockTimer !== null) {
@@ -301,13 +410,22 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // The chip at the right end of the prompt footer, beside any mode labels.
+  // The chips at the right end of the prompt footer, beside any mode labels: Auto Model's switch,
+  // then the panel's.
   on('ui.render', { component: 'SessionMode' }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    const isAuto = (await read($, prefs)).autoModel
 
     return (
       <Box flexDirection="row" gap={1}>
         {e.props.modes.length > 0 && <Text dimColor>{e.props.modes.join(' & ')}</Text>}
+        <Button key="auto-chip" plain onPress={() => void setAutoModel($, !isAuto)}>
+          {isAuto ? (
+            <Text bold color={INK} backgroundColor={GOLD}> Auto Model: On </Text>
+          ) : (
+            <Text color={LIGHT} backgroundColor={SLATE}> Auto Model: Off </Text>
+          )}
+        </Button>
         <Button key="rack-chip" plain onPress={() => void togglePanel($)}>
           <Text color={INK} backgroundColor={ORANGE}> ◆ Rods Rack ▾ </Text>
         </Button>
@@ -322,8 +440,9 @@ export const register: Register = on => {
     const above = await next(e)
     const panel = await drawPanel($, e)
     const { Box } = $.ui.resolve(e)
+    // The wrapper carries no size: the engine refuses its own node under a Box with a width.
     return (
-      <Box flexDirection="column" width={e.props.bodyColumns}>
+      <Box flexDirection="column">
         {above}
         {panel}
       </Box>
@@ -385,22 +504,27 @@ export const register: Register = on => {
     return yield* next(request)
   })
 
-  // Prompt Upgrade: rewrite the person's own prompt on the cheapest model, or send it as typed.
+  // Before the person's own prompt is sent: Prompt Upgrade rewrites it and Auto Model picks its
+  // model, both on the smallest model and at the same time, so neither waits on the other.
   on('prompt.submit', async ($, e, next) => {
     const p = await read($, prefs)
-    const isOwnPrompt = e.origin.kind === 'composer'
-    if (!p.promptUpgrade || !isOwnPrompt || e.text.trim() === '' || e.text.startsWith('/') || (e.attachments?.length ?? 0) > 0) {
-      return next(e)
-    }
+    const text = e.text.trim()
+    const isTyped = e.origin.kind === 'composer' && text !== '' && !text.startsWith('/')
+    const wantsUpgrade = isTyped && p.promptUpgrade && (e.attachments?.length ?? 0) === 0
+    // Never sorted: a short reply, or a message sent while Claude is working; the model stays.
+    const wantsPick = isTyped && p.autoModel && !isShortReply(text) && !(await read($, isWorking))
+    if (!wantsUpgrade && !wantsPick) return next(e)
 
-    const reply = await $.model.complete({
-      model: 'haiku',
-      system: UPGRADE_SYSTEM,
-      prompt: e.text,
-      maxTokens: 2000,
-      timeoutMs: UPGRADE_TIMEOUT_MS,
-    })
-    const upgraded = reply.isAnswered ? reply.text.trim() : ''
+    const [upgraded, family] = await Promise.all([
+      wantsUpgrade ? upgradePrompt($, e.text) : Promise.resolve(''),
+      wantsPick ? pickFamily($, e.text, p.autoUnavailable) : Promise.resolve(null),
+    ])
+
+    if (family !== null) {
+      const picked = await update($, prefs, x => (x.autoModel ? { ...x, model: family } : x))
+      await $.store.set(STORE_KEY, picked)
+      showAutoStatus($, picked)
+    }
     if (upgraded === '') return next(e)
 
     await update($, lastUpgrade, () => ({ original: e.text, upgraded }))
