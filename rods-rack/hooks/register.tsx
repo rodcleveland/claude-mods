@@ -12,6 +12,7 @@ import type {
 import { autoStatusText, familyFor, guessLevel, isShortReply, parseLevel, SORT_SYSTEM } from './auto-model'
 import { registerCleanView } from './clean-view'
 import { DOCK_PANE, registerDock } from './dock'
+import { REPORT_PANE, registerReport } from './report'
 import { badge, composeStatus, HELPER_OPTIONS, IDLE_MISSION, isBigTeam, SIZES } from './dock-logic'
 
 // Edit this to change what "Create photo or video" asks for.
@@ -181,6 +182,13 @@ async function openDock($: Dollar) {
   await showAutoStatus($, await read($, prefs))
 }
 
+// The Work Report's pane, from the footer chip or the panel's launcher (a press, so asked). The
+// report keeps today's date fresh itself when a task finishes or a tab is pressed.
+async function openReport($: Dollar) {
+  const opened = await $.ui.open({ id: REPORT_PANE, title: 'Work Report', columns: 80 })
+  if (!opened.isPlaced) $.ui.toast('The window is too narrow to show the Work Report. Widen it and type /report again.')
+}
+
 // The panel's Team size row: up to 20 is set at once; a big team, or Custom, finishes in the dock.
 async function pickTeamSize($: Dollar, size: number | 'custom') {
   if (size === 'custom') {
@@ -339,6 +347,9 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
         <Button key="launch-dock" plain onPress={() => void openDock($)}>
           ◆ Agent Dock
         </Button>
+        <Button key="launch-report" plain onPress={() => void openReport($)}>
+          ▤ Work Report
+        </Button>
       </Box>
     </Box>
   )
@@ -357,6 +368,7 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
 export const register: Register = on => {
   // The dock first, so its hooks sit above Clean View's.
   registerDock(on)
+  registerReport(on)
   registerCleanView(on)
 
   on('session.start', async ($, e, next) => {
@@ -447,6 +459,9 @@ export const register: Register = on => {
           ) : (
             <Text color={LIGHT} backgroundColor={SLATE}> Auto Model: Off </Text>
           )}
+        </Button>
+        <Button key="report-chip" plain onPress={() => void openReport($)}>
+          <Text color={LIGHT} backgroundColor={SLATE}> ◆ Report </Text>
         </Button>
         <Button key="rack-chip" plain onPress={() => void togglePanel($)}>
           <Text color={INK} backgroundColor={ORANGE}> ◆ Rods Rack ▾ </Text>

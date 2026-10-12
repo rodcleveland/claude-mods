@@ -14,8 +14,8 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
   when Claude does not name one on the Agent call.
 - **Team size**: how many helper agents each request is split across (1, 3, 5, 10, 20, 50, 100 or
   Custom). The same setting as the Agent Dock's (see below).
-- **Launch**: *Create photo or video* (edit `CREATE_PROMPT` in `hooks/register.tsx`) and the
-  **Agent Dock**.
+- **Launch**: *Create photo or video* (edit `CREATE_PROMPT` in `hooks/register.tsx`), the
+  **Agent Dock** and the **Work Report**.
 
 Your choices are saved and come back in new sessions and after `/clear`, `/resume` and `/branch`.
 
@@ -115,6 +115,32 @@ in parallel, with a pane that shows each helper as a card.
   request, plus one follow-up round if Claude used fewer. Fast & Cheap runs them on Haiku.
 - The plain logic is in `hooks/dock-logic.ts`; the pane and hooks in `hooks/dock.tsx`.
 
+## Work Report
+
+A pane of what Claude has finished for you: tasks done, an estimate of the hours that saved, and
+what that time is worth, with Today, Week (last 7 days), Month (last 30 days) and Year (January 1
+through today) tabs.
+
+- **Open it**: `/report`, the `◆ Report` chip in the footer, or ▤ Work Report in the panel.
+- **What counts**: one prompt you typed that ends with an answer is one task. Helper agents, tool
+  steps, cancelled turns, slash commands, plugin prompts and messages sent mid-turn do not count.
+- **Kinds**: Emails (any mail tool), Images and video (image or video tools, or an image or video
+  file written), Documents (document, slide or spreadsheet tools, or a document file written),
+  Research (web search, page reading, transcripts) and Other, decided by the tools the request and
+  its helpers used. A file only read (a screenshot looked at while debugging) does not count.
+- **The estimate**: minutes saved per task (Emails 10, Documents 30, Images and video 20, Research
+  25, Other 10) at $50 an hour. `/report settings` lists them; `/report settings rate 75` or
+  `/report settings emails 15` changes one. Hours and dollars are always labelled as estimates.
+- **Saved data**: one record per calendar day in Rods Rack's store (`report:day:YYYY-MM-DD`), plus
+  the settings. Days are your local dates, read from the system clock and stepped at noon.
+- **Past history**: `scripts/report-history.py` estimates the days before the report was installed
+  from saved sessions in `~/.claude/projects`, with the same rules, and writes
+  `~/.claude/rods-rack-data/report-history.json`, which the report reads at start-up. Re-run it to
+  refresh: `python3 rods-rack/scripts/report-history.py`. Sessions run from `/tmp` are skipped.
+  On the day it was run, the estimate and the live count are added together, so re-running it on a
+  day the live report already counted counts that day's earlier tasks twice.
+- The plain logic is in `hooks/report-logic.ts`; the pane and hooks in `hooks/report.tsx`.
+
 ## Install
 
 At the prompt of a terminal Claude Code session (2.1.275 or later):
@@ -203,7 +229,16 @@ The Agent Dock's hooks live in `hooks/dock.tsx` (`registerDock(on)`, registered 
 Clean View's `tool.call` hooks on `plan_steps` and `report_progress` pass a helper's calls to the
 dock: its plan is skipped and its report moves its card.
 
+The Work Report's hooks live in `hooks/report.tsx` (`registerReport(on)`):
+
+- `session.start`: load the days, the settings and the history estimate; register `/report`.
+- `command.run` on `report`: open the pane, or list and change the settings; it answers at once.
+- `ui.render` on `Pane` `rods-rack-report`: the report.
+- `prompt.submit` from the composer: a prompt you typed starts a task.
+- `tool.call`: each tool the request and its helpers use, for the task's kind.
+- `turn.complete`: a typed request that ended with an answer is recorded for today.
+
 `$` calls: `$.agent.list`, `$.clock.after`, `$.clock.every`, `$.clock.now`, `$.command.register`,
 `$.model.complete`, `$.prompt.submit`, `$.state.get`, `$.state.set`, `$.store.get`, `$.store.set`,
-`$.env.get`, `$.process.run`, `$.tool.register`, `$.ui.close`, `$.ui.invalidate`, `$.ui.log`,
+`$.env.get`, `$.fs.read`, `$.process.run`, `$.session.model`, `$.store.keys`, `$.tool.register`, `$.ui.close`, `$.ui.invalidate`, `$.ui.log`,
 `$.ui.open`, `$.ui.panes`, `$.ui.resolve`, `$.ui.status`, `$.ui.toast`.

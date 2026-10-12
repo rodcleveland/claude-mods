@@ -81,6 +81,27 @@ export type DockMission = {
   finishedAt: number | null
 }
 
+export type ReportKind = 'emails' | 'documents' | 'media' | 'research' | 'other'
+export type ReportTab = 'today' | 'week' | 'month' | 'year'
+
+// One calendar day's work: finished tasks per kind and per model.
+export type ReportDay = {
+  kinds: Record<ReportKind, number>
+  models: Record<string, number>
+}
+
+// Minutes each kind of task saves, and what an hour is worth.
+export type ReportSettings = {
+  minutes: Record<ReportKind, number>
+  rate: number
+}
+
+// The estimate of past work, built once from saved sessions; days before cutoffDay come from it.
+export type ReportHistory = {
+  cutoffDay: string
+  days: Record<string, ReportDay>
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'rods-rack': {
@@ -98,6 +119,13 @@ declare module 'claude-code' {
       checklist: CleanChecklist
       tick: number
       isWorking: boolean
+      reportTab: ReportTab
+      reportToday: string
+      reportDays: Record<string, ReportDay>
+      reportHistory: ReportHistory | null
+      reportSettings: ReportSettings
+      // The typed request now running: what its tools touched, or null between requests.
+      reportPending: string[] | null
     }
   }
 }
