@@ -283,7 +283,8 @@ async function nameJob($: Dollar, jobId: number, text: string) {
     timeoutMs: 10000,
   })
   if (!reply.isAnswered) return
-  const words = reply.text.replace(/["'.]/g, '').trim().split(/\s+/).slice(0, 6).join(' ')
+  // Quotes and a closing period go; an apostrophe inside a word (Florida's) stays.
+  const words = reply.text.trim().replace(/^["'“‘\s]+|["'”’.\s]+$/g, '').replace(/"/g, '').split(/\s+/).slice(0, 6).join(' ')
   const title = cleanName(words)
   if (title === EMPTY_NAME) return
   await change($, c => (c.jobId === jobId ? { ...c, title } : c))
@@ -308,6 +309,26 @@ function meter(t: CleanTask, frame: number): string {
   return Array.from({ length: METER_CELLS }, (_, i) => ((i - frame) % METER_CELLS + METER_CELLS) % METER_CELLS < 3 ? '█' : '░').join('')
 }
 
+// The whole job at a glance: which step of how many, and how far along the job is. Each done step
+// counts in full and the current one by its reported percent.
+export function overallProgress(tasks: readonly CleanTask[]): { step: number; total: number; percent: number } {
+  const total = tasks.length
+  if (total === 0) return { step: 0, total: 0, percent: 0 }
+  const done = tasks.filter(t => t.status === 'done').length
+  const active = tasks.findIndex(t => t.status === 'active')
+  const share = tasks.reduce((sum, t) => sum + (t.status === 'done' ? 100 : t.status === 'active' && t.hasReported ? t.percent : 0), 0)
+  return { step: active === -1 ? Math.max(1, done) : active + 1, total, percent: Math.round(share / total) }
+}
+
+// Each job's own color, taken in turn: its border, its title, its ▶ and its meter. Green, yellow and
+// the error color keep their meaning (done, needs you, stuck), so none of them is here.
+export const JOB_COLORS = ['#5AB0F0', '#B07AA1', '#4FC1B0', '#E8743B', '#E06C9F', '#8F9BFF'] as const
+
+export const jobColor = (jobId: number) => JOB_COLORS[(((jobId - 1) % JOB_COLORS.length) + JOB_COLORS.length) % JOB_COLORS.length]!
+
+// The border and the padding inside it take two cells each side.
+const FRAME_CELLS = 4
+
 const fit = (name: string, width: number) => (name.length <= width ? name.padEnd(width) : name.slice(0, Math.max(1, width - 1)) + '…')
 
 // The checklist with its Clean View button above it; with Clean View off, the button alone.
@@ -315,7 +336,9 @@ async function drawCleanBand($: Dollar, e: RenderInput<'AbovePrompt'>): Promise<
   const { Box, Text, Button } = $.ui.resolve(e)
   const isOn = await read($, cleanViewEnabled)
   const c = await read($, checklist)
-  const columns = e.props.bodyColumns
+  const isFramed = e.surface === 'terminal' && isOn && c.phase !== 'idle'
+  const columns = e.props.bodyColumns - (isFramed ? FRAME_CELLS : 0)
+  const color = jobColor(c.jobId)
 
   const button = (
     <Button key="clean-view-toggle" label={isOn ? '● Clean View: ON' : '○ Clean View: OFF'} onPress={() => setCleanView($, !isOn)} />
@@ -350,15 +373,41 @@ async function drawCleanBand($: Dollar, e: RenderInput<'AbovePrompt'>): Promise<
       case 'done':
         return <Text color="green" wrap="truncate-end">✓ All done · {title} · took {elapsed((c.finishedAt ?? now) - started)}</Text>
       default:
-        return <Text bold wrap="truncate-end">{title} · {elapsed(now - started)}</Text>
+        return <Text bold color={color} wrap="truncate-end">{title} · {elapsed(now - started)}</Text>
     }
   })()
 
-  if (c.phase === 'done' && c.isCollapsed) return header(headline)
+  // A rounded border in the job's color, on the terminal; other surfaces draw their own frame.
+  const framed = (body: RenderElement) =>
+    isFramed ? (
+      <Box borderStyle="round" borderColor={color} paddingX={1} width={e.props.bodyColumns}>{body}</Box>
+    ) : (
+      body
+    )
+
+  if (c.phase === 'done' && c.isCollapsed) return framed(header(headline))
 
   // Mark, space, name, two spaces, a 10-cell meter, two spaces, a label of up to 7.
   const nameWidth = Math.max(8, Math.min(NAME_MAX, columns - 2 - 2 - METER_CELLS - 2 - 7))
   const firstUpcoming = c.tasks.findIndex(t => t.status === 'upcoming')
+
+  // "Step 2 of 4", a bar ending where the step meters end, and the job's percent in the label column.
+  // The placeholders a new job shows are not the plan, so they get no step count.
+  const overall = overallProgress(c.tasks)
+  const stepLine = (() => {
+    if (c.source === 'placeholder' || overall.total === 0) return null
+    const label = `Step ${overall.step} of ${overall.total}`
+    const barCells = Math.max(METER_CELLS, 2 + nameWidth + 2 + METER_CELLS - label.length - 2)
+    const filled = Math.round((overall.percent / 100) * barCells)
+    return (
+      <Text key="overall" wrap="truncate-end">
+        <Text dimColor>{label}  </Text>
+        <Text color={color}>{'█'.repeat(filled)}</Text>
+        <Text dimColor>{'░'.repeat(barCells - filled)}</Text>
+        <Text color={color}>  {overall.percent}%</Text>
+      </Text>
+    )
+  })()
 
   const rows = c.tasks.map((t, i) => {
     if (t.status === 'done') {
@@ -374,9 +423,9 @@ async function drawCleanBand($: Dollar, e: RenderInput<'AbovePrompt'>): Promise<
     if (t.status === 'active') {
       return (
         <Text key={t.id} wrap="truncate-end">
-          <Text color="cyan">{c.phase === 'needsYou' ? '‖ ' : '▶ '}</Text>
+          <Text color={color}>{c.phase === 'needsYou' ? '‖ ' : '▶ '}</Text>
           <Text bold>{fit(t.name, nameWidth)}</Text>
-          <Text color="cyan">  {meter(t, frame)}  </Text>
+          <Text color={color}>  {meter(t, frame)}  </Text>
           <Text>{t.hasReported ? `${t.percent}%` : 'Working'}</Text>
         </Text>
       )
@@ -388,11 +437,12 @@ async function drawCleanBand($: Dollar, e: RenderInput<'AbovePrompt'>): Promise<
     )
   })
 
-  return (
+  return framed(
     <Box flexDirection="column" width={columns}>
       {header(headline)}
+      {stepLine}
       {rows}
-    </Box>
+    </Box>,
   )
 }
 

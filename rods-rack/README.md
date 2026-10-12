@@ -28,7 +28,11 @@ Build my landing page · 1m 12s                     [ ● Clean View: ON ]
 ○ Polish the footer                ░░░░░░░░░░  Up next
 ```
 
-The header follows the job: its name and running time; **Needs you** with the reason while a
+On the terminal the checklist sits in a rounded border. Each job takes its own color in turn (blue,
+purple, teal, orange, pink, periwinkle) for its border, title, ▶ and meter; green, yellow and the
+error color keep meaning done, needs you and stuck. Under the header, once Claude has a plan,
+`Step 2 of 4` with a bar and the whole job's percent (done steps in full, the current step by its
+reported percent). The header follows the job: its name and running time; **Needs you** with the reason while a
 permission prompt, a question or your reply is awaited (the current step's ▶ becomes ‖);
 `⚠ Stuck:` with one plain sentence; `■ Stopped` after Esc; and `✓ All done · took …`, which shrinks
 to one line after 5 seconds. Tool rows, results, folded tool groups and the background hint are

@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { cleanName } from '../hooks/clean-view'
+import { cleanName, JOB_COLORS, overallProgress } from '../hooks/clean-view'
 
 const PLAN = 'mcp__rods-rack__plan_steps'
 const REPORT = 'mcp__rods-rack__report_progress'
@@ -28,6 +28,7 @@ function engine(on: On) {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }) as never)
   on('tool.register', ($, e) => ({ value: { tool: `mcp__rods-rack__${e.name}` } }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
   on('classic.SessionStart', () => ({}) as never)
   on('classic.Notification', () => ({}) as never)
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
@@ -178,3 +179,61 @@ test('Esc shows Stopped', async ($, on) => {
   expect(text).toContain('■ Stopped')
   expect(text).toContain('you pressed Esc')
 })
+
+test('the checklist has a border in its job\'s color, and each job gets a new color', async ($, on) => {
+  engine(on)
+  await begin($)
+  await $.tool.call({ tool: PLAN, steps: ['Read your brand notes', 'Build the pricing section'] } as never)
+
+  const first = await drawn(await $.ui.mount({ ...BAND, surface: 'terminal' }))
+  expect(first).toContain('"borderStyle":"round"')
+  expect(first).toContain(`"borderColor":"${JOB_COLORS[0]}"`)
+
+  // The desktop draws its own frame: no border there, the job's color still on the title.
+  const desktop = await drawn(await $.ui.mount({ ...BAND, surface: 'desktop' }))
+  expect(desktop).not.toContain('borderStyle')
+  expect(desktop).toContain(JOB_COLORS[0])
+
+  // A finished job: the next prompt starts a new one.
+  await $.tool.call({ tool: REPORT, task: 'Build the pricing section', percent: 100 } as never)
+  await $.turn.complete({ answer: 'Done.', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer' })
+  await $.turn.start({ text: 'Now write a short welcome email for new customers', turnId: 't2' })
+  const second = await drawn(await $.ui.mount({ ...BAND, surface: 'terminal' }))
+  expect(second).toContain(`"borderColor":"${JOB_COLORS[1]}"`)
+})
+
+test('with nothing running, the button stands alone with no border', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  const text = await drawn(await $.ui.mount({ ...BAND, surface: 'terminal' }))
+  expect(text).not.toContain('borderStyle')
+  expect(text).toContain('Clean View: ON')
+})
+
+test('the whole job is counted as done steps plus the current step\'s percent', async () => {
+  const task = (status: 'done' | 'active' | 'upcoming', percent = 0, hasReported = false) =>
+    ({ id: status, name: status, status, percent, hasReported })
+  expect(overallProgress([])).toEqual({ step: 0, total: 0, percent: 0 })
+  expect(overallProgress([task('done', 100, true), task('active', 40, true), task('upcoming'), task('upcoming')]))
+    .toEqual({ step: 2, total: 4, percent: 35 })
+  expect(overallProgress([task('done', 100, true), task('active'), task('upcoming')])).toEqual({ step: 2, total: 3, percent: 33 })
+  expect(overallProgress([task('done', 100, true), task('done', 100, true)])).toEqual({ step: 2, total: 2, percent: 100 })
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the checklist shows Step 2 of 4 and the job's percent on ${surface}`, async ($, on) => {
+    engine(on)
+    await begin($)
+    const placeholders = await drawn(await $.ui.mount({ ...BAND, surface }))
+    expect(placeholders).not.toContain('Step ')
+
+    await $.tool.call({ tool: PLAN, steps: ['Read your brand notes', 'Build the pricing section', 'Add the contact form', 'Polish the footer'] } as never)
+    await $.tool.call({ tool: REPORT, task: 'Build the pricing section', percent: 40 } as never)
+
+    const text = await drawn(await $.ui.mount({ ...BAND, surface }))
+    expect(text).toContain('Step 2 of 4')
+    // The percent is drawn as its number and its sign, two pieces of one Text.
+    expect(text).toContain('"35","%"')
+    expect(text.indexOf('Step 2 of 4')).toBeLessThan(text.indexOf('Read your brand notes'))
+  })
+}
