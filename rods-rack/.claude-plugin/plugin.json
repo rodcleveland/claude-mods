@@ -1,0 +1,9 @@
+{
+  "name": "rods-rack",
+  "version": "0.1.0",
+  "description": "A footer chip that opens a control panel for model, effort and behavior toggles.",
+  "author": {
+    "name": "Rodman Cleveland"
+  },
+  "types": "./types/index.d.ts"
+}

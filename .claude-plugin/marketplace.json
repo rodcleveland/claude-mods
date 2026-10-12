@@ -1,0 +1,5 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "Rodman Cleveland" },
+  "plugins": [{ "name": "rods-rack", "source": "./rods-rack" }]
+}
