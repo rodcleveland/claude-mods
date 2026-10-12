@@ -126,19 +126,23 @@ through today) tabs.
   steps, cancelled turns, slash commands, plugin prompts and messages sent mid-turn do not count.
 - **Kinds**: Emails (any mail tool), Images and video (image or video tools, or an image or video
   file written), Documents (document, slide or spreadsheet tools, or a document file written),
-  Research (web search, page reading, transcripts) and Other, decided by the tools the request and
-  its helpers used. A file only read (a screenshot looked at while debugging) does not count.
+  Coding (any other file written, or a build, test or git command), Research (web search, page
+  reading, transcripts) and Other, decided by the tools the request and its helpers used, in that
+  order. Coding outranks Research, so looking up docs while coding is coding. A file only read (a
+  screenshot looked at while debugging) does not count.
 - **The estimate**: minutes saved per task (Emails 10, Documents 30, Images and video 20, Research
-  25, Other 10) at $50 an hour. `/report settings` lists them; `/report settings rate 75` or
+  25, Coding 20, Other 10) at $50 an hour. `/report settings` lists them; `/report settings rate 75` or
   `/report settings emails 15` changes one. Hours and dollars are always labelled as estimates.
 - **Saved data**: one record per calendar day in Rods Rack's store (`report:day:YYYY-MM-DD`), plus
   the settings. Days are your local dates, read from the system clock and stepped at noon.
 - **Past history**: `scripts/report-history.py` estimates the days before the report was installed
   from saved sessions in `~/.claude/projects`, with the same rules, and writes
   `~/.claude/rods-rack-data/report-history.json`, which the report reads at start-up. Re-run it to
-  refresh: `python3 rods-rack/scripts/report-history.py`. Sessions run from `/tmp` are skipped.
-  On the day it was run, the estimate and the live count are added together, so re-running it on a
-  day the live report already counted counts that day's earlier tasks twice.
+  re-sort the same stretch with the current rules: `python3 rods-rack/scripts/report-history.py`
+  (it keeps the first run's cutoff, so nothing is counted twice). `--refresh` moves the cutoff up
+  to now; tasks the live report already recorded earlier on that day are then counted twice.
+  Sessions run from `/tmp` are skipped. On the cutoff day the estimate and the live count are
+  added together.
 - The plain logic is in `hooks/report-logic.ts`; the pane and hooks in `hooks/report.tsx`.
 
 ## Install

@@ -6,8 +6,13 @@ the Work Report reads when a session starts. It uses the live recorder's rules: 
 typed that ended with an answer is one task; helper agents, slash commands, notifications and
 plugin prompts are not tasks; a task's kind comes from the tools it and its helpers used.
 
-Run it again any time to refresh the estimate:  python3 rods-rack/scripts/report-history.py
+Run it again to re-sort the same stretch with the current rules (it keeps the first run's cutoff,
+so nothing the live report already counted is counted twice):
+    python3 rods-rack/scripts/report-history.py
+Add --refresh to move the cutoff up to now instead. Tasks the live report recorded earlier on the
+new cutoff day are then counted twice.
 """
+import argparse
 import glob
 import json
 import os
@@ -18,7 +23,7 @@ from datetime import datetime
 
 PROJECTS = os.path.expanduser("~/.claude/projects")
 OUT = os.path.expanduser("~/.claude/rods-rack-data/report-history.json")
-KINDS = ["emails", "documents", "media", "research", "other"]
+KINDS = ["emails", "documents", "media", "research", "coding", "other"]
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 # The same rules as classify() in hooks/report-logic.ts.
@@ -27,6 +32,7 @@ MEDIA_TOOL = re.compile(r"image|video|openart|higgsfield|photo|thumbnail|gif|nan
 MEDIA_FILE = re.compile(r"\.(png|jpe?g|gif|webp|heic|svg|mp4|mov|webm|m4v|avi|mkv)$", re.I)
 DOC_TOOL = re.compile(r"docx|pptx|xlsx|\bpdf\b|_pdf|pdf_|slides?|spreadsheet|sheets?|claude_docs|google_drive|documents?|word", re.I)
 DOC_FILE = re.compile(r"\.(docx?|pptx?|xlsx?|pdf|odt|rtf|key|pages)$", re.I)
+CODE_COMMAND = re.compile(r"\b(git (commit|push|merge|rebase|checkout|switch)|npm (run|test|install|ci)|npx|pnpm|yarn|bun|pytest|jest|vitest|tsc|cargo|go (build|test|run)|dotnet|msbuild|gradle|mvn|make|claude plugin (test|validate))\b")
 RESEARCH = re.compile(r"websearch|webfetch|web_search|fetch|search_web|transcript|youtube|yt-dlp|context7|scrape|deep-research|research", re.I)
 
 
@@ -56,6 +62,8 @@ def classify(signals):
         return "media"
     if any(DOC_TOOL.search(t) for t in tools) or any(DOC_FILE.search(f) for f in files):
         return "documents"
+    if files or any(CODE_COMMAND.search(c) for c in commands):
+        return "coding"
     if any(RESEARCH.search(t) for t in tools) or any(re.search(r"yt-dlp|curl\s+https?:", c) for c in commands):
         return "research"
     return "other"
@@ -154,34 +162,50 @@ def tasks_in(path):
         for h_start, h_signals in helpers:
             if start is not None and start <= h_start <= until:
                 signals = signals + h_signals
-        out.append((end.astimezone().strftime("%Y-%m-%d"), classify(signals), model or ""))
+        out.append((end.astimezone().strftime("%Y-%m-%d"), classify(signals), model or "", end))
     return out
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Estimate the Work Report's past from saved sessions.")
+    parser.add_argument("--refresh", action="store_true", help="move the cutoff up to now")
+    args = parser.parse_args()
+
+    now = datetime.now().astimezone()
+    until, cutoff_day, generated = now, now.strftime("%Y-%m-%d"), now.isoformat(timespec="seconds")
+    if not args.refresh and os.path.exists(OUT):
+        try:
+            with open(OUT, encoding="utf-8") as fh:
+                previous = json.load(fh)
+            until = datetime.fromisoformat(previous["generatedAt"])
+            cutoff_day, generated = previous["cutoffDay"], previous["generatedAt"]
+        except (OSError, ValueError, KeyError):
+            pass
+
     days = defaultdict(lambda: {"kinds": {k: 0 for k in KINDS}, "models": defaultdict(int)})
     # Sessions run from Claude's own scratch space (/tmp/claude-*) are test runs, not your work.
     files = [p for p in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")) if not os.path.basename(os.path.dirname(p)).startswith("-tmp-")]
     total = 0
     for n, path in enumerate(files, 1):
-        for day, kind, model in tasks_in(path):
+        for day, kind, model, end in tasks_in(path):
+            if end > until:
+                continue
             days[day]["kinds"][kind] += 1
             days[day]["models"][model or "Not recorded"] += 1
             total += 1
         if n % 100 == 0:
             print(f"  read {n} of {len(files)} sessions", file=sys.stderr)
 
-    today = datetime.now().astimezone().strftime("%Y-%m-%d")
     history = {
-        "cutoffDay": today,
-        "generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "cutoffDay": cutoff_day,
+        "generatedAt": generated,
         "days": {d: {"kinds": v["kinds"], "models": dict(v["models"])} for d, v in sorted(days.items())},
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as fh:
         json.dump(history, fh, separators=(",", ":"))
     kinds = {k: sum(v["kinds"][k] for v in days.values()) for k in KINDS}
-    print(f"wrote {OUT}: {total} tasks over {len(days)} days, {min(days, default='-')} to {max(days, default='-')}")
+    print(f"wrote {OUT}: {total} tasks over {len(days)} days, {min(days, default='-')} to {max(days, default='-')}, up to {generated}")
     print("by kind: " + ", ".join(f"{k} {n}" for k, n in kinds.items()))
 
 

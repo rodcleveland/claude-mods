@@ -3,13 +3,14 @@ import type { ReportDay, ReportHistory, ReportKind, ReportSettings, ReportTab } 
 // The Work Report's plain logic, with no engine calls: sorting a task by its tools, which prompts
 // count, calendar days stepped at noon, adding days, ranges, streaks, estimates and big numerals.
 
-export const KINDS: readonly ReportKind[] = ['emails', 'documents', 'media', 'research', 'other']
+export const KINDS: readonly ReportKind[] = ['emails', 'documents', 'media', 'research', 'coding', 'other']
 
 export const KIND_LABELS: Readonly<Record<ReportKind, string>> = {
   emails: 'Emails',
   documents: 'Documents',
   media: 'Images and video',
   research: 'Research',
+  coding: 'Coding',
   other: 'Other',
 }
 
@@ -23,11 +24,13 @@ export const KIND_SETTING_NAMES: Readonly<Record<string, ReportKind>> = {
   video: 'media',
   media: 'media',
   research: 'research',
+  coding: 'coding',
+  code: 'coding',
   other: 'other',
 }
 
 export const DEFAULT_SETTINGS: ReportSettings = {
-  minutes: { emails: 10, documents: 30, media: 20, research: 25, other: 10 },
+  minutes: { emails: 10, documents: 30, media: 20, research: 25, coding: 20, other: 10 },
   rate: 50,
 }
 
@@ -45,6 +48,7 @@ export const KIND_COLORS: Readonly<Record<ReportKind, string>> = {
   documents: GOLD,
   media: '#E06C9F',
   research: GREEN,
+  coding: '#6CC5E8',
   other: MUTED,
 }
 
@@ -79,9 +83,12 @@ const MEDIA_TOOL = /image|video|openart|higgsfield|photo|thumbnail|gif|nano.?ban
 const MEDIA_FILE = /\.(png|jpe?g|gif|webp|heic|svg|mp4|mov|webm|m4v|avi|mkv)$/i
 const DOC_TOOL = /docx|pptx|xlsx|\bpdf\b|_pdf|pdf_|slides?|spreadsheet|sheets?|claude_docs|google_drive|documents?|word/i
 const DOC_FILE = /\.(docx?|pptx?|xlsx?|pdf|odt|rtf|key|pages)$/i
+// Coding: a file written that is no image, video or document, or a build, test or git command.
+const CODE_COMMAND = /\b(git (commit|push|merge|rebase|checkout|switch)|npm (run|test|install|ci)|npx|pnpm|yarn|bun|pytest|jest|vitest|tsc|cargo|go (build|test|run)|dotnet|msbuild|gradle|mvn|make|claude plugin (test|validate))\b/
 const RESEARCH = /websearch|webfetch|web_search|fetch|search_web|transcript|youtube|yt-dlp|context7|scrape|deep-research|research/i
 
-// One kind per task, by the first that any of its signals matches, in the order the kinds are listed.
+// One kind per task, the first that any of its signals matches: Emails, Images and video, Documents,
+// Coding, Research, then Other. Coding outranks Research, so looking up docs while coding is coding.
 export function classify(signals: readonly string[]): ReportKind {
   const tools = signals.filter(s => s.startsWith('tool:') || s.startsWith('skill:')).map(s => s.slice(s.indexOf(':') + 1))
   const files = signals.filter(s => s.startsWith('file:')).map(s => s.slice(5))
@@ -89,6 +96,7 @@ export function classify(signals: readonly string[]): ReportKind {
   if (tools.some(t => MAIL.test(t))) return 'emails'
   if (tools.some(t => MEDIA_TOOL.test(t)) || files.some(f => MEDIA_FILE.test(f))) return 'media'
   if (tools.some(t => DOC_TOOL.test(t)) || files.some(f => DOC_FILE.test(f))) return 'documents'
+  if (files.length > 0 || commands.some(c => CODE_COMMAND.test(c))) return 'coding'
   if (tools.some(t => RESEARCH.test(t)) || commands.some(c => /yt-dlp|curl\s+https?:/.test(c))) return 'research'
   return 'other'
 }
@@ -104,7 +112,7 @@ export function modelLabel(model: string | null | undefined): string {
 
 // ── Days ─────────────────────────────────────────────────────────────────────
 
-export const emptyDay = (): ReportDay => ({ kinds: { emails: 0, documents: 0, media: 0, research: 0, other: 0 }, models: {} })
+export const emptyDay = (): ReportDay => ({ kinds: { emails: 0, documents: 0, media: 0, research: 0, coding: 0, other: 0 }, models: {} })
 
 export function recordTask(day: ReportDay | undefined, kind: ReportKind, model: string): ReportDay {
   const base = day ?? emptyDay()
@@ -280,7 +288,7 @@ export function changeSettings(settings: ReportSettings, args: string): ReportSe
   if (!Number.isFinite(n) || n < 0 || n > 100_000 || value === '') return 'Give a number, like /report settings rate 75.'
   if (name === 'rate') return { ...settings, rate: n }
   const kind = KIND_SETTING_NAMES[name]
-  if (kind === undefined) return 'Change rate, emails, documents, images, research or other, like /report settings emails 15.'
+  if (kind === undefined) return 'Change rate, emails, documents, images, research, coding or other, like /report settings emails 15.'
   if (n > 1440) return 'Minutes a task is a number from 0 to 1440.'
   return { ...settings, minutes: { ...settings.minutes, [kind]: n } }
 }

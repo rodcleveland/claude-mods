@@ -55,7 +55,15 @@ test('a task is sorted by the tools it used', async () => {
   expect(classify(signalsOf('Write', { file_path: '/out/poster.png' }))).toBe('media')
   expect(classify(signalsOf('Write', { file_path: '/out/proposal.docx' }))).toBe('documents')
   expect(classify(signalsOf('WebSearch', { query: 'bakeries' }))).toBe('research')
-  expect(classify(signalsOf('Edit', { file_path: '/src/app.ts' }))).toBe('other')
+  // Coding: a code file written, or a build, test or git command.
+  expect(classify(signalsOf('Edit', { file_path: '/src/app.ts' }))).toBe('coding')
+  expect(classify(signalsOf('Bash', { command: 'npm test' }))).toBe('coding')
+  expect(classify(signalsOf('Bash', { command: 'git commit -F msg.txt' }))).toBe('coding')
+  // Looking up docs while coding is still coding.
+  expect(classify([...signalsOf('WebFetch', { url: 'https://docs.example.com' }), ...signalsOf('Edit', { file_path: '/src/app.ts' })])).toBe('coding')
+  // Answering a question with no tools, or only reading, is Other.
+  expect(classify([])).toBe('other')
+  expect(classify(signalsOf('Bash', { command: 'ls -la' }))).toBe('other')
   // A screenshot read while debugging is not image work.
   expect(classify(signalsOf('Read', { file_path: '/tmp/screenshot.png' }))).toBe('other')
   // Mail outranks research when a task did both.
@@ -193,5 +201,21 @@ test('/report settings lists the estimate and changes it', async ($, on) => {
   expect((await $.command.run({ command: 'report', args: 'settings' } as never)).text).toContain('Hourly rate: $50')
   expect((await $.command.run({ command: 'report', args: 'settings rate 75' } as never)).text).toContain('Hourly rate: $75')
   expect((await $.command.run({ command: 'report', args: 'settings emails 15' } as never)).text).toContain('Emails: 15 minutes')
+  expect((await $.command.run({ command: 'report', args: 'settings' } as never)).text).toContain('Coding: 20 minutes')
+  expect((await $.command.run({ command: 'report', args: 'settings coding 45' } as never)).text).toContain('Coding: 45 minutes')
   expect((await $.command.run({ command: 'report', args: 'settings rate lots' } as never)).text).toContain('Give a number')
+})
+
+test('a coding request is recorded under Coding with its own minutes', async ($, on) => {
+  engine(on)
+  await start($)
+  await task($, 'Fix the login bug in the signup form', { tool: 'Edit', file_path: '/src/login.ts', old_string: 'a', new_string: 'b' }, 't1')
+  await $.command.run({ command: 'report', args: 'settings coding 30' } as never)
+
+  const text = await drawn(await $.ui.mount({ ...PANE, surface: 'terminal' }))
+  expect(text).toContain('Coding')
+  // One coding task at 30 minutes is half an hour, on the Coding row.
+  const row = text.slice(text.indexOf('"Coding'), text.indexOf('"Other'))
+  expect(row).toContain('"      1"')
+  expect(row).toContain('0.5 h')
 })
