@@ -18,3 +18,17 @@ mod straight from the repo with no install or bump.
 ## Repository
 
 - Private GitHub repo: `rodcleveland/claude-mods`, default branch `main`.
+
+## Project Docs (Obsidian Vault)
+
+Architecture, feature, API, and decision docs live in `/docs/`.
+Read relevant notes before making architectural decisions.
+
+**Entry point:** `/docs/00-Maps/🗺️ Project MOC.md`
+
+**Key references:**
+- Architecture: `/docs/Architecture/System Overview.md`
+- Features: `/docs/00-Maps/🗺️ Features MOC.md`
+- APIs: `/docs/00-Maps/🗺️ API MOC.md`
+- Decisions (ADRs): `/docs/Decisions/` — read before suggesting
+  alternatives to choices already made

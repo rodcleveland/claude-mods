@@ -27,3 +27,7 @@ __pycache__/
 
 # Engine-generated plugin types
 **/.claude-plugin/types/
+
+# Generated docs and knowledge graph (local only)
+docs/
+graphify-out/

@@ -1,5 +1,16 @@
 {
   "name": "claude-mods",
-  "owner": { "name": "Rodman Cleveland" },
-  "plugins": [{ "name": "rods-rack", "source": "./rods-rack" }]
+  "owner": {
+    "name": "Rodman Cleveland"
+  },
+  "plugins": [
+    {
+      "name": "rods-rack",
+      "source": "./rods-rack"
+    },
+    {
+      "name": "memory-fork",
+      "source": "./memory-fork"
+    }
+  ]
 }

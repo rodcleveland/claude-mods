@@ -1,0 +1,12 @@
+{
+  "name": "memory-fork",
+  "version": "0.4.0",
+  "description": "After each turn Haiku decides whether memory needs a change; a tool-less fork drafts it, the mod writes it, stages a note for the Obsidian vault (folded in by /closesession) and writes memsearch when installed",
+  "author": {
+    "name": "Ray Amjad",
+    "url": "https://github.com/ray-amjad"
+  },
+  "repository": "https://github.com/ray-amjad/claude-code-mods/tree/main/plugins/memory-fork",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
