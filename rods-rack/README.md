@@ -101,8 +101,9 @@ in parallel, with a pane that shows each helper as a card.
 - **What Claude is told**: above size 1, each typed request (not a short reply, a slash command or a
   message sent mid-turn) carries an instruction to split it into exactly N helpers, launched in one
   message, each reporting its progress with `report_progress`. Agent calls past N are refused. A
-  request that used fewer gets one follow-up asking for the rest. Claude can still launch fewer; the
-  dock shows the real count.
+  request that used fewer gets one follow-up asking for the rest, unless Clean View is on and Claude
+  already finished every step of its plan (then nothing is left to split). Claude can still launch
+  fewer; the dock shows the real count.
 - **Queueing**: helpers past the engine's limit wait in the dock rather than being refused. "At a
   time" is the lower of `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (20 if unset) and
   `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` (10 if unset). Esc stops the waiting ones.
@@ -294,7 +295,7 @@ The Agent Dock's hooks live in `hooks/dock.tsx` (`registerDock(on)`, registered 
 - `prompt.submit`: start a mission; above size 1, add the split instruction as context.
 - `session.append` on `response`: queued cards as soon as Claude writes its Agent calls.
 - `tool.call` on `Agent`: the helper model, the Team Size cap, the wait for a slot, the card's state.
-- `turn.complete`: one nudge if the request used fewer helpers, else the summary.
+- `turn.complete`: one nudge if the request used fewer helpers and its Clean View plan has steps left, else the summary.
 
 Clean View's `tool.call` hooks on `plan_steps` and `report_progress` pass a helper's calls to the
 dock: its plan is skipped and its report moves its card.

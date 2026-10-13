@@ -131,6 +131,50 @@ test('a request that used 3 of 10 gets exactly one nudge', async ($, on) => {
   expect(nudges[0]!.text).toContain('the other 7')
 })
 
+// Clean View's plan for the request: every step reported done, or the first one only. The engine
+// starts the turn and answers the plan's tool calls.
+function planned(on: On) {
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('tool.call', () => ({ result: 'ok' }) as never)
+}
+
+async function plan($: Engine, finishAll: boolean) {
+  await $.turn.start({ text: 'Commit, pull and push my changes', turnId: 't1' })
+  const steps = ['Save the changes', 'Get the latest', 'Send the changes']
+  await $.tool.call({ tool: 'mcp__rods-rack__plan_steps', steps } as never)
+  for (const task of finishAll ? steps : steps.slice(0, 1)) {
+    await $.tool.call({ tool: 'mcp__rods-rack__report_progress', task, percent: 100 } as never)
+  }
+}
+
+const ANSWERED = { answer: 'Done.', durationMs: 1000, isAborted: false, turnId: 't1', reason: 'answer' } as const
+
+test('no nudge when every step of the plan is done, even with 0 of 5 helpers', async ($, on) => {
+  const { sent, clock } = engine(on)
+  planned(on)
+  await start($)
+  await $.command.run({ command: 'dock', args: '5' } as never)
+  await $.prompt.submit(typed('Commit, pull and push my changes'))
+  await plan($, true)
+
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+  expect(sent.filter(s => s.text.startsWith('You used'))).toHaveLength(0)
+})
+
+test('a plan with steps left still gets the nudge', async ($, on) => {
+  const { sent, clock } = engine(on)
+  planned(on)
+  await start($)
+  await $.command.run({ command: 'dock', args: '5' } as never)
+  await $.prompt.submit(typed('Commit, pull and push my changes'))
+  await plan($, false)
+
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+  expect(sent.filter(s => s.text.startsWith('You used 0 of 5 helpers'))).toHaveLength(1)
+})
+
 test('three Agent calls show queued, then working, then done cards', async ($, on) => {
   const { clock, hold, release } = engine(on, {}, { CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY: '2' })
   await start($)

@@ -3,6 +3,7 @@ import type { EngineInterface, On, RenderElement, RenderInput } from 'claude-cod
 
 import type { DockCard, DockMission, RackPrefs } from '../types'
 import { autoStatusText, isShortReply } from './auto-model'
+import { IDLE as IDLE_CHECKLIST } from './clean-view'
 import {
   addQueued,
   atATime,
@@ -27,6 +28,7 @@ import {
   initials,
   INK,
   isBigTeam,
+  isPlanFinished,
   isSettled,
   jobName,
   LIVE_GREEN,
@@ -80,6 +82,8 @@ const dockFolded = atom({ plugin: 'rods-rack', key: 'dockFolded' } as const, fal
 // Owned by Rods Rack (register.tsx) and Clean View (clean-view.tsx); the dock reads them.
 const prefs = atom({ plugin: 'rods-rack', key: 'prefs' } as const, DEFAULT_PREFS)
 const isWorking = atom({ plugin: 'rods-rack', key: 'isWorking' } as const, false)
+const cleanViewEnabled = atom({ plugin: 'rods-rack', key: 'cleanViewEnabled' } as const, true)
+const checklist = atom({ plugin: 'rods-rack', key: 'checklist' } as const, IDLE_CHECKLIST)
 
 // ── Clocks, the status line and the pane ─────────────────────────────────────
 
@@ -609,14 +613,16 @@ export function registerDock(on: On) {
     return ran
   }).catch(($, e, next) => next(e))
 
-  // The request's turn ended: one nudge if it used fewer helpers than the Team Size, else the summary.
+  // The request's turn ended: one nudge if it used fewer helpers than the Team Size and work is
+  // left, else the summary. A Clean View plan with every step done has none left to split.
   on('turn.complete', { reason: /^/ }, async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     try {
       const mission = await read($, dockMission)
       const now = await $.clock.now()
       const isShort = mission.wantsSplit && mission.admitted < mission.size && isSettled(mission)
-      if (e.reason === 'answer' && isShort && !mission.nudged) {
+      const isFinished = (await read($, cleanViewEnabled)) && isPlanFinished(await read($, checklist))
+      if (e.reason === 'answer' && isShort && !isFinished && !mission.nudged) {
         await changeMission($, m => ({ ...m, nudged: true }))
         void $.prompt.submit({ text: nudgeText(mission.admitted, mission.size) }).catch(() => undefined)
       } else if (mission.phase === 'live') {

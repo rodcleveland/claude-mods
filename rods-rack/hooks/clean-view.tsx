@@ -55,7 +55,7 @@ const GUIDANCE = [
   '- If this session has TodoWrite or TaskCreate, you may use that to-do list as the plan instead.',
 ].join('\n')
 
-const IDLE: CleanChecklist = {
+export const IDLE: CleanChecklist = {
   jobId: 0,
   title: '',
   phase: 'idle',

@@ -1,4 +1,4 @@
-import type { DockCard, DockCardStatus, DockMission, RackHelper } from '../types'
+import type { CleanChecklist, DockCard, DockCardStatus, DockMission, RackHelper } from '../types'
 
 // The Agent Dock's plain logic, with no engine calls: team sizes, names, badges, the instruction
 // and nudge texts, counts, clocks, the summary, meters and the mission's changes.
@@ -125,6 +125,9 @@ export function splitInstruction(size: number): string | null {
 
 export const capDenial = (size: number) =>
   `Team Size is ${size}: this request already has ${size} helpers. Finish with the helpers you have.`
+
+// Claude ticked off every step of its Clean View plan, so no work is left for more helpers.
+export const isPlanFinished = (c: CleanChecklist) => c.hasPlan && c.tasks.length > 0 && c.tasks.every(t => t.status === 'done')
 
 export function nudgeText(used: number, size: number): string {
   return `You used ${used} of ${size} helpers. Split the remaining work across the other ${size - used}, one helper per piece, all in parallel.`
