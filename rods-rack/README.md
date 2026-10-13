@@ -275,7 +275,7 @@ Hooks:
   and turns Auto Model off. In a live check the event did not arrive for `/model`, so this may not run.
 - `classic.StopFailure` on `model_not_found`: Auto Model steps down past that model.
 - `ui.render` on `SessionMode`: the footer chips (Auto Model, Report, TV, then Rods Rack).
-- `ui.render` on `AbovePrompt`: the control panel, below whatever else the band draws.
+- `ui.render` on `AbovePrompt`: the control panel, above whatever else the band draws (the checklist sits just above the prompt).
 
 Clean View's hooks live in `hooks/clean-view.tsx` (`registerCleanView(on)`):
 
@@ -291,7 +291,7 @@ Clean View's hooks live in `hooks/clean-view.tsx` (`registerCleanView(on)`):
 - `classic.Notification`: permission prompts and questions become Needs you.
 - `classic.StopFailure`: an API error becomes one calm Stuck sentence.
 - `turn.complete`: mark the turn over; Stopped, Stuck, waiting for your reply, or All done.
-- `ui.render` on `AbovePrompt`: the checklist and its button, on top of the band.
+- `ui.render` on `AbovePrompt`: the checklist and its button, at the bottom of the band, just above the prompt, with the control panel above it.
 - `ui.render` on `ToolUse`, `ToolResult` and `ToolGroup` (hidden) and `ToolProgress` (hint blanked).
 - `turn.step`: apply model and effort to the main conversation's requests.
 - `prompt.submit`: Prompt Upgrade and Auto Model's pick, side by side.

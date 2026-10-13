@@ -501,17 +501,18 @@ export function registerCleanView(on: On) {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // The checklist sits on top of the band; whatever else draws there (the Rods Rack panel) goes below.
+  // The checklist sits at the bottom of the band, just above the prompt; whatever else draws there
+  // (the Rods Rack panel) goes above it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !isActive) return next(e)
     const own = await drawCleanBand($, e)
-    const below = await next(e)
+    const above = await next(e)
     const { Box } = $.ui.resolve(e)
     // The wrapper carries no size: the engine refuses its own node under a Box with a width.
     return (
       <Box flexDirection="column">
+        {above}
         {own}
-        {below}
       </Box>
     )
   })

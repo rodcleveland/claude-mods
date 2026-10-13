@@ -254,7 +254,7 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
   const isClean = await read($, cleanViewEnabled)
   const s = await read($, seen)
   const upgrade = await read($, lastUpgrade)
-  const outer = Math.min(64, e.props.bodyColumns)
+  const outer = Math.min(68, e.props.bodyColumns)
   const width = isTerminal ? outer - 4 : outer
 
   const activeFamily = p.model ?? familyOf(s.model)
@@ -518,8 +518,9 @@ export const register: Register = on => {
     )
   })
 
-  // The panel: a bordered box at the right of the band above the prompt, below whatever else draws
-  // there (Clean View's checklist). The engine draws its [–] collapse mark outside it.
+  // The panel: a bordered box at the right of the band above the prompt, above whatever else draws
+  // there (Clean View's checklist sits just above the prompt). The engine draws its [–] collapse
+  // mark outside it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await read($, panelOpen))) return next(e)
     const above = await next(e)

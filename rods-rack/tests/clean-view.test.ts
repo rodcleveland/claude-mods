@@ -237,3 +237,15 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(text.indexOf('Step 2 of 4')).toBeLessThan(text.indexOf('Read your brand notes'))
   })
 }
+
+test('the Rods Rack panel opens above the checklist, which stays just above the prompt', async ($, on) => {
+  engine(on)
+  await begin($)
+  await $.tool.call({ tool: PLAN, steps: ['Read your brand notes', 'Build the page'] } as never)
+  await $.command.run({ command: 'rods-rack', args: '' } as never)
+
+  const text = await drawn(await $.ui.mount({ ...BAND, surface: 'terminal' }))
+  expect(text).toContain('Read your brand notes')
+  expect(text.indexOf('R O D S   R A C K')).toBeGreaterThan(-1)
+  expect(text.indexOf('R O D S   R A C K')).toBeLessThan(text.indexOf('Read your brand notes'))
+})
