@@ -1,7 +1,8 @@
-import type { ReportDay, ReportHistory, ReportKind, ReportSettings, ReportTab } from '../types'
+import type { ReportDay, ReportHistory, ReportKind, ReportSettings, ReportTab, ReportTokens } from '../types'
 
 // The Work Report's plain logic, with no engine calls: sorting a task by its tools, which prompts
-// count, calendar days stepped at noon, adding days, ranges, streaks, estimates and big numerals.
+// count, tokens used, calendar days stepped at noon, adding days, ranges, streaks, estimates and
+// big numerals.
 
 export const KINDS: readonly ReportKind[] = ['emails', 'documents', 'media', 'artifacts', 'research', 'coding', 'other']
 
@@ -181,14 +182,60 @@ export function modelLabel(model: string | null | undefined): string {
 
 // ── Days ─────────────────────────────────────────────────────────────────────
 
-export const emptyDay = (): ReportDay => ({ kinds: { emails: 0, documents: 0, media: 0, artifacts: 0, research: 0, coding: 0, other: 0 }, models: {} })
+export const emptyTokens = (): ReportTokens => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+
+export const emptyDay = (): ReportDay => ({
+  kinds: { emails: 0, documents: 0, media: 0, artifacts: 0, research: 0, coding: 0, other: 0 },
+  models: {},
+  tokens: emptyTokens(),
+  modelTokens: {},
+})
 
 export function recordTask(day: ReportDay | undefined, kind: ReportKind, model: string): ReportDay {
   const base = day ?? emptyDay()
   return {
+    ...base,
     kinds: { ...base.kinds, [kind]: (base.kinds[kind] ?? 0) + 1 },
     models: { ...base.models, [model]: (base.models[model] ?? 0) + 1 },
   }
+}
+
+// What one turn cost, in the API's spelling (the engine's TurnUsage).
+export type TokenUsage = {
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+  model: string
+}
+
+const amount = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0)
+
+export const tokenTotal = (t: ReportTokens | undefined) =>
+  t === undefined ? 0 : amount(t.input) + amount(t.output) + amount(t.cacheRead) + amount(t.cacheWrite)
+
+export const usageTokens = (usage: Omit<TokenUsage, 'model'>): ReportTokens => ({
+  input: amount(usage.input_tokens),
+  output: amount(usage.output_tokens),
+  cacheRead: amount(usage.cache_read_input_tokens),
+  cacheWrite: amount(usage.cache_creation_input_tokens),
+})
+
+// Adds one turn's tokens to the day, whether or not the turn was a finished task.
+export function recordTokens(day: ReportDay | undefined, usage: TokenUsage): ReportDay {
+  const base = day ?? emptyDay()
+  const was = base.tokens ?? emptyTokens()
+  const turn = usageTokens(usage)
+  const added = tokenTotal(turn)
+  if (added === 0) return base
+  const tokens: ReportTokens = {
+    input: amount(was.input) + turn.input,
+    output: amount(was.output) + turn.output,
+    cacheRead: amount(was.cacheRead) + turn.cacheRead,
+    cacheWrite: amount(was.cacheWrite) + turn.cacheWrite,
+  }
+  const models = base.modelTokens ?? {}
+  return { ...base, tokens, modelTokens: { ...models, [usage.model]: amount(models[usage.model]) + added } }
 }
 
 // Days are stepped at noon UTC, so a clock change never skips or repeats a date.
@@ -239,10 +286,15 @@ export function tabDates(tab: ReportTab, today: string): string {
 }
 
 // A day's record: the history estimate before its cutoff day, both on that day, live records after.
+// The history may count tokens past its cutoff day (up to its own tokensUntil); those are added in.
 export function dayRecord(key: string, live: Readonly<Record<string, ReportDay>>, history: ReportHistory | null): ReportDay | undefined {
   const own = live[key]
-  const past = history !== null && key <= history.cutoffDay ? history.days[key] : undefined
+  const past = history === null ? undefined : history.days[key]
   if (past === undefined) return own
+  if (key > history!.cutoffDay) {
+    if (tokenTotal(past.tokens) === 0) return own
+    return sumDays([{ ...emptyDay(), tokens: past.tokens, modelTokens: past.modelTokens ?? {} }, own])
+  }
   if (own === undefined || key < history!.cutoffDay) return past
   return sumDays([past, own])
 }
@@ -253,6 +305,12 @@ export function sumDays(days: ReadonlyArray<ReportDay | undefined>): ReportDay {
     if (day === undefined) continue
     for (const kind of KINDS) total.kinds[kind] += day.kinds[kind] ?? 0
     for (const [model, n] of Object.entries(day.models)) total.models[model] = (total.models[model] ?? 0) + n
+    const tokens = total.tokens!
+    tokens.input += amount(day.tokens?.input)
+    tokens.output += amount(day.tokens?.output)
+    tokens.cacheRead += amount(day.tokens?.cacheRead)
+    tokens.cacheWrite += amount(day.tokens?.cacheWrite)
+    for (const [model, n] of Object.entries(day.modelTokens ?? {})) total.modelTokens![model] = amount(total.modelTokens![model]) + amount(n)
   }
   return total
 }
@@ -293,6 +351,18 @@ export function bestDay(days: readonly string[], hoursOf: (key: string) => numbe
 export const formatHours = (h: number) => (h < 10 ? (Math.round(h * 10) / 10).toFixed(1) : Math.round(h).toLocaleString('en-US'))
 export const formatCount = (n: number) => n.toLocaleString('en-US')
 export const formatDollars = (d: number) => `$${Math.round(d).toLocaleString('en-US')}`
+
+// Tokens in short form: 950, 12.3K, 4.5M, 1.2B (one decimal below 100, none from 100 up).
+export function formatTokens(n: number): string {
+  const units: ReadonlyArray<[number, string]> = [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']]
+  for (const [size, unit] of units) {
+    if (n >= size * 0.9995) {
+      const v = n / size
+      return `${v >= 99.95 ? Math.round(v).toLocaleString('en-US') : v.toFixed(1)}${unit}`
+    }
+  }
+  return String(Math.round(n))
+}
 
 // Big numerals: three rows of heavy box-drawing characters per glyph.
 const GLYPHS: Readonly<Record<string, readonly [string, string, string]>> = {
@@ -375,6 +445,9 @@ export function readHistory(text: string): ReportHistory | null {
   try {
     const parsed = JSON.parse(text) as Partial<ReportHistory>
     if (typeof parsed.cutoffDay !== 'string' || !isDayKey(parsed.cutoffDay) || typeof parsed.days !== 'object' || parsed.days === null) return null
+    for (const day of Object.values(parsed.days)) {
+      if (typeof day !== 'object' || day === null || typeof day.kinds !== 'object' || typeof day.models !== 'object') return null
+    }
     return { cutoffDay: parsed.cutoffDay, days: parsed.days }
   } catch {
     return null

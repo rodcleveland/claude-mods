@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { addDays, classify, dayOfYear, emptyDay, isTypedPrompt, recordTask, signalsOf, streak, sumDays, writesOutsideTmp } from '../hooks/report-logic'
+import { addDays, classify, dayOfYear, dayRecord, emptyDay, formatTokens, isTypedPrompt, recordTask, recordTokens, signalsOf, streak, sumDays, tokenTotal, writesOutsideTmp } from '../hooks/report-logic'
 
 const TODAY = '2026-10-12'
 const PANE = {
@@ -267,4 +267,85 @@ test('/report settings has its own Artifacts minutes', async ($, on) => {
   await start($)
   expect((await $.command.run({ command: 'report', args: 'settings' } as never)).text).toContain('Artifacts: 30 minutes')
   expect((await $.command.run({ command: 'report', args: 'settings artifacts 45' } as never)).text).toContain('Artifacts: 45 minutes')
+})
+
+const spent = (model: string, input: number, output: number, cacheRead: number, cacheWrite: number) => ({
+  input_tokens: input,
+  output_tokens: output,
+  cache_read_input_tokens: cacheRead,
+  cache_creation_input_tokens: cacheWrite,
+  model,
+})
+
+test("every turn's tokens count: tasks, helpers and cancelled requests", async ($, on) => {
+  engine(on)
+  await start($)
+  await $.prompt.submit(typed('Research bakery pricing in Jacksonville'))
+  await $.tool.call({ tool: 'WebSearch', query: 'bakery prices' } as never)
+  // A helper agent's turn: its tokens count, and it is no task.
+  await $.turn.complete({ answer: 'Found 4.', durationMs: 10, isAborted: false, turnId: 'h1', agentId: 'a1', reason: 'answer', usage: spent('claude-haiku-5-5', 1000, 500, 200_000, 0) } as never)
+  await $.turn.complete({ answer: 'Done.', durationMs: 10, isAborted: false, turnId: 't1', reason: 'answer', usage: spent('claude-opus-5-5', 2000, 3000, 1_000_000, 50_000) } as never)
+  // A cancelled request is no task, but what it spent counts.
+  await $.prompt.submit(typed('Draft a long report on everything'))
+  await $.turn.complete({ answer: '', durationMs: 10, isAborted: true, turnId: 't2', reason: 'aborted', usage: spent('claude-opus-5-5', 0, 100, 300_000, 0) } as never)
+
+  const text = await drawn(await $.ui.mount({ ...PANE, surface: 'terminal' }))
+  expect(text).toContain('T O K E N S   U S E D')
+  // 1,556,600 tokens in all: Opus 1,355,100 and Haiku 201,500, the larger first.
+  expect(text).toContain('"1.6M total"')
+  expect(text).toContain('"    1.4M"')
+  expect(text).toContain('"    202K"')
+  expect(text.indexOf('Opus 5.5', text.indexOf('T O K E N S'))).toBeLessThan(text.indexOf('Haiku 5.5', text.indexOf('T O K E N S')))
+  expect(text).toContain('New input 3.0K  ·  Output 3.6K  ·  Cache reads 1.5M  ·  Cache writes 50.0K')
+  // Still one task, the research one.
+  expect(text).toContain('"      1"')
+  expect(text).not.toContain('"      2"')
+})
+
+test('tokens show even on a day with no finished task', async ($, on) => {
+  engine(on)
+  await start($)
+  await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, turnId: 'n1', reason: 'answer', usage: spent('claude-opus-5-5', 10, 20, 30, 40) } as never)
+  const text = await drawn(await $.ui.mount({ ...PANE, surface: 'terminal' }))
+  expect(text).toContain('Nothing finished yet today.')
+  expect(text).toContain('"100 total"')
+})
+
+test('the tokens section stays out of a report with no tokens', async ($, on) => {
+  engine(on)
+  await start($)
+  await task($, 'Research bakery pricing in Jacksonville', { tool: 'WebSearch', query: 'bakery prices' }, 't1')
+  const text = await drawn(await $.ui.mount({ ...PANE, surface: 'terminal' }))
+  expect(text).not.toContain('T O K E N S')
+})
+
+test('tokens add up, and days saved before tokens were counted add as zero', async () => {
+  const old = { kinds: { ...emptyDay().kinds, coding: 2 }, models: { 'claude-opus-5-5': 2 } }
+  const day = recordTokens(recordTask(undefined, 'coding', 'claude-opus-5-5'), spent('claude-opus-5-5', 1, 2, 3, 4))
+  const total = sumDays([old, day, recordTokens(undefined, spent('claude-sonnet-5-5', 5, 0, 0, 0))])
+  expect(total.kinds.coding).toBe(3)
+  expect(total.tokens).toEqual({ input: 6, output: 2, cacheRead: 3, cacheWrite: 4 })
+  expect(total.modelTokens).toEqual({ 'claude-opus-5-5': 10, 'claude-sonnet-5-5': 5 })
+  // Recording keeps the tasks, and recording a task keeps the tokens.
+  expect(recordTask(day, 'emails', 'claude-opus-5-5').tokens).toEqual(day.tokens)
+  expect(tokenTotal(undefined)).toBe(0)
+})
+
+test('history tokens after the cutoff day add to the live ones, its tasks do not', async () => {
+  const live = { '2026-10-13': recordTokens(undefined, spent('claude-opus-5-5', 0, 10, 0, 0)) }
+  const past = { ...recordTask(undefined, 'coding', 'claude-opus-5-5'), tokens: { input: 0, output: 5, cacheRead: 0, cacheWrite: 0 }, modelTokens: { 'claude-opus-5-5': 5 } }
+  const day = dayRecord('2026-10-13', live, { cutoffDay: '2026-10-12', days: { '2026-10-13': past } })!
+  expect(day.kinds.coding).toBe(0)
+  expect(tokenTotal(day.tokens)).toBe(15)
+})
+
+test('tokens print short', async () => {
+  expect(formatTokens(0)).toBe('0')
+  expect(formatTokens(950)).toBe('950')
+  expect(formatTokens(1000)).toBe('1.0K')
+  expect(formatTokens(12_345)).toBe('12.3K')
+  expect(formatTokens(999_999)).toBe('1.0M')
+  expect(formatTokens(123_456_789)).toBe('123M')
+  expect(formatTokens(10_678_966_713)).toBe('10.7B')
+  expect(formatTokens(2_500_000_000_000)).toBe('2,500B')
 })

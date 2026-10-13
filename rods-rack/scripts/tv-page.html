@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YouTube TV</title>
+<style>
+  :root {
+    --cabinet: #2a211b;
+    --cabinet-edge: #3b2e25;
+    --bezel: #121212;
+    --ink: #e8e2d6;
+    --muted: #9b917f;
+    --led: #ff3b30;
+    --gold: #f2c46d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #0d0b0a;
+    color: var(--ink);
+    font: 14px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+  }
+  .tv {
+    width: min(100%, 880px);
+    background: linear-gradient(180deg, var(--cabinet-edge), var(--cabinet));
+    border-radius: 22px;
+    padding: 18px;
+    box-shadow: 0 0 0 2px #000, 0 18px 40px rgba(0, 0, 0, .6);
+    display: grid;
+    grid-template-columns: 1fr 120px;
+    gap: 18px;
+  }
+  .bezel {
+    background: var(--bezel);
+    border-radius: 26px / 20px;
+    padding: 14px;
+    box-shadow: inset 0 0 0 3px #000, inset 0 0 30px rgba(0, 0, 0, .9);
+  }
+  .screen {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: 18px / 14px;
+    overflow: hidden;
+    background: #000;
+  }
+  .screen iframe, #player { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .glass {
+    position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(ellipse at 30% 20%, rgba(255, 255, 255, .07), transparent 55%),
+      repeating-linear-gradient(0deg, rgba(0, 0, 0, .12) 0 1px, transparent 1px 3px);
+  }
+  .overlay {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    background: rgba(0, 0, 0, .55); color: var(--ink); cursor: pointer; border: 0; font: inherit;
+  }
+  .overlay strong { display: block; font-size: 20px; color: var(--gold); letter-spacing: .08em; }
+  .overlay[hidden], .off[hidden] { display: none; }
+  .off {
+    position: absolute; inset: 0; display: grid; place-items: center; background: #050505;
+    color: #3a3a3a; letter-spacing: .3em;
+  }
+  .side { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-top: 6px; }
+  .channel {
+    width: 100%; text-align: center; background: #000; border-radius: 6px; padding: 6px 0;
+    color: var(--led); font-size: 30px; font-weight: 700; letter-spacing: .1em;
+    text-shadow: 0 0 8px rgba(255, 59, 48, .7);
+  }
+  .knob {
+    width: 54px; height: 54px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #6b5a4c, #2b221c 70%);
+    box-shadow: 0 2px 0 #000, inset 0 0 0 2px #1a1410;
+  }
+  .grille { width: 100%; height: 70px; background: repeating-linear-gradient(0deg, #1b1511 0 3px, #33281f 3px 6px); border-radius: 6px; }
+  .brand { font-size: 11px; color: var(--muted); letter-spacing: .25em; text-align: center; }
+  .now { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+  .now b { color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 560px) {
+    .tv { grid-template-columns: 1fr; }
+    .side { flex-direction: row; justify-content: space-between; }
+    .channel { width: 90px; }
+    .grille { display: none; }
+  }
+</style>
+</head>
+<body>
+<main class="tv">
+  <div class="bezel">
+    <div class="screen">
+      <div id="player"></div>
+      <div class="glass"></div>
+      <div class="off" id="off">NO SIGNAL</div>
+      <button class="overlay" id="sound" hidden>
+        <span><strong>CLICK FOR SOUND</strong>Chrome needs one click before a page may play sound.</span>
+      </button>
+    </div>
+  </div>
+  <div class="side">
+    <div class="channel" id="channel">--</div>
+    <div class="knob"></div>
+    <div class="knob"></div>
+    <div class="grille"></div>
+    <div class="brand">RODS RACK<br>COLOR TV</div>
+  </div>
+  <div class="now"><span>NOW PLAYING</span><b id="title">Nothing yet. Pick a channel in Rods Rack.</b></div>
+</main>
+<script>
+  const TOKEN = '__TV_TOKEN__'
+  const $ = id => document.getElementById(id)
+
+  let player = null
+  let isReady = false
+  let queue = []
+  let ids = []
+  let at = 0
+  let volume = 50
+  let failures = 0
+  let isOff = true
+  let lastError = null
+  let watchdog = null
+
+  const hasClicked = () => navigator.userActivation ? navigator.userActivation.hasBeenActive : false
+
+  function report() {
+    if (!isReady) return
+    const data = player.getVideoData ? player.getVideoData() : {}
+    const isCurrent = data.video_id === ids[at]
+    const body = {
+      state: isOff ? -2 : player.getPlayerState(),
+      videoId: ids[at] || null,
+      title: isCurrent ? data.title || null : null,
+      author: isCurrent ? data.author || null : null,
+      index: at,
+      count: ids.length,
+      volume,
+      muted: player.isMuted(),
+      needsClick: !hasClicked(),
+      error: lastError,
+    }
+    document.title = body.title ? `${body.title} · YouTube TV` : 'YouTube TV'
+    $('title').textContent = body.title || (isOff ? 'Nothing yet. Pick a channel in Rods Rack.' : 'Tuning…')
+    fetch(`/state?t=${TOKEN}`, { method: 'POST', body: JSON.stringify(body) }).catch(() => {})
+  }
+
+  function showSoundButton() {
+    $('sound').hidden = isOff || !player.isMuted() || volume === 0
+  }
+
+  function setChannel(c) {
+    $('channel').textContent = c && c.number ? String(c.number).padStart(2, '0') : c ? 'AV' : '--'
+  }
+
+  // One video at a time: the player's own playlists stall on a video that will not embed.
+  function load(index) {
+    if (ids.length === 0) return
+    at = ((index % ids.length) + ids.length) % ids.length
+    lastError = null
+    // Before the first click Chrome only lets a muted video start; the click unmutes it.
+    if (!hasClicked()) player.mute()
+    player.loadVideoById(ids[at])
+    clearTimeout(watchdog)
+    // A video that neither starts nor fails in this time is treated as one that will not play.
+    watchdog = setTimeout(() => {
+      const state = player.getPlayerState()
+      if (!isOff && (state === -1 || state === 5) && player.getVideoData().video_id === ids[at]) skip(150)
+    }, 12000)
+  }
+
+  function skip(code) {
+    lastError = code
+    failures += 1
+    if (failures < ids.length) load(at + 1)
+    report()
+  }
+
+  function run(command) {
+    if (!isReady) { queue.push(command); return }
+    switch (command.op) {
+      case 'play':
+        isOff = false
+        failures = 0
+        $('off').hidden = true
+        setChannel(command.channel || null)
+        ids = Array.isArray(command.ids) ? command.ids.filter(id => /^[\w-]{11}$/.test(id)) : []
+        load(command.index || 0)
+        break
+      case 'pause': player.pauseVideo(); break
+      case 'resume': player.playVideo(); break
+      case 'toggle': player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo(); break
+      case 'next': failures = 0; load(at + 1); break
+      case 'prev': failures = 0; load(at - 1); break
+      case 'volume':
+        volume = Math.max(0, Math.min(100, Number(command.value) || 0))
+        player.setVolume(volume)
+        if (hasClicked() && volume > 0) player.unMute()
+        break
+      case 'off':
+        isOff = true
+        clearTimeout(watchdog)
+        player.stopVideo()
+        setChannel(null)
+        $('off').hidden = false
+        break
+    }
+    showSoundButton()
+    report()
+  }
+
+  window.onYouTubeIframeAPIReady = () => {
+    player = new YT.Player('player', {
+      width: '100%',
+      height: '100%',
+      playerVars: { playsinline: 1, rel: 0, origin: location.origin },
+      events: {
+        onReady: () => {
+          isReady = true
+          player.setVolume(volume)
+          const waiting = queue
+          queue = []
+          waiting.forEach(run)
+          report()
+        },
+        onStateChange: e => {
+          if (e.data === 1) { failures = 0; lastError = null; clearTimeout(watchdog) }
+          if (e.data === 0 && !isOff) load(at + 1)
+          showSoundButton()
+          report()
+        },
+        // Skip a video that will not play here, unless every one of them has failed.
+        onError: e => { clearTimeout(watchdog); skip(e.data) },
+      },
+    })
+  }
+
+  $('sound').addEventListener('click', () => {
+    player.unMute()
+    player.setVolume(volume)
+    if (player.getPlayerState() !== 1) player.playVideo()
+    showSoundButton()
+    report()
+  })
+
+  const events = new EventSource(`/events?t=${TOKEN}`)
+  let lost = 0
+  events.onopen = () => { lost = 0 }
+  events.onmessage = e => { try { run(JSON.parse(e.data)) } catch {} }
+  // Rods Rack turned the TV off or the session ended: this tab has nothing more to play.
+  events.onerror = () => {
+    lost += 1
+    if (lost < 3) return
+    events.close()
+    if (isReady) run({ op: 'off' })
+    $('off').textContent = 'OFF · CLOSE THIS TAB'
+    $('off').hidden = false
+  }
+
+  setInterval(report, 5000)
+
+  const api = document.createElement('script')
+  api.src = 'https://www.youtube.com/iframe_api'
+  document.head.appendChild(api)
+</script>
+</body>
+</html>

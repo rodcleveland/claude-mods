@@ -84,10 +84,21 @@ export type DockMission = {
 export type ReportKind = 'emails' | 'documents' | 'media' | 'artifacts' | 'research' | 'coding' | 'other'
 export type ReportTab = 'today' | 'week' | 'month' | 'year'
 
-// One calendar day's work: finished tasks per kind and per model.
+// Tokens the API counted, in four parts: new input, output, and input read from or written to the cache.
+export type ReportTokens = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+// One calendar day's work: finished tasks per kind and per model, and every token Claude and its
+// helpers used that day, in total and per model. Days saved before tokens were counted have none.
 export type ReportDay = {
   kinds: Record<ReportKind, number>
   models: Record<string, number>
+  tokens?: ReportTokens
+  modelTokens?: Record<string, number>
 }
 
 // Minutes each kind of task saves, and what an hour is worth.
@@ -100,6 +111,39 @@ export type ReportSettings = {
 export type ReportHistory = {
   cutoffDay: string
   days: Record<string, ReportDay>
+}
+
+// YouTube TV: a channel is a name and the YouTube search that fills it.
+export type TvChannel = { name: string; query: string }
+export type TvVideo = { id: string; title: string; channel: string }
+
+export type TvSettings = {
+  channels: TvChannel[]
+  volume: number
+  // The channel last tuned, from 0; CH▲ and CH▼ step from it.
+  channel: number
+  // Pause when Claude finishes or needs you.
+  autoPause: boolean
+}
+
+// off: no player. starting: the player program and window are coming up. on: it runs.
+export type TvPower = 'off' | 'starting' | 'on'
+
+export type TvState = {
+  power: TvPower
+  // The channel showing, from 0, or null for a search or a link.
+  channel: number | null
+  label: string
+  videos: TvVideo[]
+  index: number
+  title: string | null
+  author: string | null
+  // YouTube's player state: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued.
+  playState: number
+  windows: number
+  needsClick: boolean
+  isTuning: boolean
+  note: string | null
 }
 
 declare module 'claude-code' {
@@ -126,6 +170,8 @@ declare module 'claude-code' {
       reportSettings: ReportSettings
       // The typed request now running: what its tools touched, or null between requests.
       reportPending: string[] | null
+      tv: TvState
+      tvSettings: TvSettings
     }
   }
 }

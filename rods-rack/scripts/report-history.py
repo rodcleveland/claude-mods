@@ -6,11 +6,16 @@ the Work Report reads when a session starts. It uses the live recorder's rules: 
 typed that ended with an answer is one task; helper agents, slash commands, notifications and
 plugin prompts are not tasks; a task's kind comes from the tools it and its helpers used.
 
+It also counts the tokens every saved response used, helpers' and unfinished requests' included, as
+the live report does. Each response is counted once, even when a resumed session repeats it. Tokens
+are counted up to the first run that counted them (tokensUntil), so run it once before restarting
+into a version of Rods Rack that counts tokens live.
+
 Run it again to re-sort the same stretch with the current rules (it keeps the first run's cutoff,
 so nothing the live report already counted is counted twice):
     python3 rods-rack/scripts/report-history.py
 Add --refresh to move the cutoff up to now instead. Tasks the live report recorded earlier on the
-new cutoff day are then counted twice.
+new cutoff day are then counted twice, and so are tokens since tokensUntil.
 """
 import argparse
 import glob
@@ -228,6 +233,28 @@ def tasks_in(path):
     return out
 
 
+def tokens_in(path, seen, until):
+    """(local day, model, input, output, cache read, cache write) for each response not yet seen."""
+    out = []
+    for o in rows(path):
+        if o.get("type") != "assistant":
+            continue
+        m = o.get("message") or {}
+        usage, model, t = m.get("usage"), m.get("model"), parse_time(o.get("timestamp"))
+        if not isinstance(usage, dict) or not model or model == "<synthetic>" or t is None or t > until:
+            continue
+        # One response is saved as several rows, one per content block, each repeating its usage.
+        key = (m.get("id"), o.get("requestId"))
+        if key[0] is None or key in seen:
+            continue
+        seen.add(key)
+        parts = [usage.get(k) for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")]
+        parts = [n if isinstance(n, int) and n > 0 else 0 for n in parts]
+        if sum(parts) > 0:
+            out.append((t.astimezone().strftime("%Y-%m-%d"), model, *parts))
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="Estimate the Work Report's past from saved sessions.")
     parser.add_argument("--refresh", action="store_true", help="move the cutoff up to now")
@@ -235,20 +262,33 @@ def main():
 
     now = datetime.now().astimezone()
     until, cutoff_day, generated = now, now.strftime("%Y-%m-%d"), now.isoformat(timespec="seconds")
+    tokens_until = None
     if not args.refresh and os.path.exists(OUT):
         try:
             with open(OUT, encoding="utf-8") as fh:
                 previous = json.load(fh)
             until = datetime.fromisoformat(previous["generatedAt"])
             cutoff_day, generated = previous["cutoffDay"], previous["generatedAt"]
+            tokens_until = previous.get("tokensUntil")
         except (OSError, ValueError, KeyError):
             pass
+    # Tokens were not counted before this version: the first run that counts them sets their own cutoff.
+    tokens_generated = tokens_until if not args.refresh and isinstance(tokens_until, str) else now.isoformat(timespec="seconds")
+    tokens_until_time = datetime.fromisoformat(tokens_generated)
 
-    days = defaultdict(lambda: {"kinds": {k: 0 for k in KINDS}, "models": defaultdict(int)})
+    days = defaultdict(lambda: {"kinds": {k: 0 for k in KINDS}, "models": defaultdict(int),
+                                "tokens": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}, "modelTokens": defaultdict(int)})
     # Sessions run from Claude's own scratch space (/tmp/claude-*) are test runs, not your work.
     files = [p for p in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")) if not os.path.basename(os.path.dirname(p)).startswith("-tmp-")]
-    total = 0
+    total, total_tokens, seen = 0, 0, set()
     for n, path in enumerate(files, 1):
+        helpers = glob.glob(os.path.join(os.path.splitext(path)[0], "subagents", "*.jsonl"))
+        for source in [path, *helpers]:
+            for day, model, inp, out, read, write in tokens_in(source, seen, tokens_until_time):
+                t = days[day]["tokens"]
+                t["input"], t["output"], t["cacheRead"], t["cacheWrite"] = t["input"] + inp, t["output"] + out, t["cacheRead"] + read, t["cacheWrite"] + write
+                days[day]["modelTokens"][model] += inp + out + read + write
+                total_tokens += inp + out + read + write
         for day, kind, model, end in tasks_in(path):
             if end > until:
                 continue
@@ -261,7 +301,9 @@ def main():
     history = {
         "cutoffDay": cutoff_day,
         "generatedAt": generated,
-        "days": {d: {"kinds": v["kinds"], "models": dict(v["models"])} for d, v in sorted(days.items())},
+        "tokensUntil": tokens_generated,
+        "days": {d: {"kinds": v["kinds"], "models": dict(v["models"]), "tokens": v["tokens"], "modelTokens": dict(v["modelTokens"])}
+                 for d, v in sorted(days.items())},
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8") as fh:
@@ -269,6 +311,7 @@ def main():
     kinds = {k: sum(v["kinds"][k] for v in days.values()) for k in KINDS}
     print(f"wrote {OUT}: {total} tasks over {len(days)} days, {min(days, default='-')} to {max(days, default='-')}, up to {generated}")
     print("by kind: " + ", ".join(f"{k} {n}" for k, n in kinds.items()))
+    print(f"tokens: {total_tokens:,} up to {tokens_generated}")
 
 
 if __name__ == "__main__":

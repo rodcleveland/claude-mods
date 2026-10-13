@@ -18,6 +18,7 @@ import {
   formatCount,
   formatDollars,
   formatHours,
+  formatTokens,
   GOLD,
   GREEN,
   HAIRLINE,
@@ -35,6 +36,7 @@ import {
   readHistory,
   readSettings,
   recordTask,
+  recordTokens,
   shortDate,
   signalsOf,
   streak,
@@ -43,12 +45,14 @@ import {
   tabDates,
   taskCount,
   TEXT,
+  tokenTotal,
+  usageTokens,
   tilesPerRow,
   weekday,
 } from './report-logic'
 
-// The Work Report: what Claude finished for you, the hours that is estimated to have saved, and
-// what that time is worth, for today, the week, the month and the year. Its plain logic is in
+// The Work Report: what Claude finished for you, the hours that is estimated to have saved, what
+// that time is worth, and the tokens it used, for today, the week, the month and the year. Its plain logic is in
 // report-logic.ts; the past is an estimate built from saved sessions by scripts/report-history.py.
 
 type Dollar = EngineInterface
@@ -198,6 +202,12 @@ async function drawReport($: Dollar, e: RenderInput<'Pane'>): Promise<RenderElem
         <Text> </Text>
         <Text color={TEXT} wrap="wrap">{empty}</Text>
         <Text> </Text>
+        {tokenTotal(total.tokens) > 0 ? (
+          <Box flexDirection="column" width={width}>
+            {drawTokens(table, width, total)}
+            <Text> </Text>
+          </Box>
+        ) : null}
         {footer}
       </Box>
     )
@@ -215,6 +225,12 @@ async function drawReport($: Dollar, e: RenderInput<'Pane'>): Promise<RenderElem
       <Text> </Text>
       {drawModels(table, width, total)}
       <Text> </Text>
+      {tokenTotal(total.tokens) > 0 ? (
+        <Box flexDirection="column" width={width}>
+          {drawTokens(table, width, total)}
+          <Text> </Text>
+        </Box>
+      ) : null}
       {drawChart(table, width, tab, today, key => hoursSaved(recordOf(key), settings), key => taskCount(recordOf(key)) > 0)}
       <Text> </Text>
       {footer}
@@ -340,6 +356,50 @@ function drawModels(table: Table, width: number, total: ReportDay): RenderElemen
   )
 }
 
+// "Tokens used": the total on the heading, a row per model with a bar and its tokens, then the four
+// parts the API counts. Helpers' tokens are in it, and turns that did not finish a task.
+function drawTokens(table: Table, width: number, total: ReportDay): RenderElement {
+  const { Box, Text } = table
+  const tokens = total.tokens!
+  const entries = Object.entries(total.modelTokens ?? {}).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
+  const labelWidth = 18
+  const countWidth = 8
+  const unitWidth = 7
+  const barWidth = Math.max(4, width - 2 - labelWidth - countWidth - unitWidth - 2)
+  const max = entries[0]?.[1] ?? 0
+  const label = `TOKENS USED`
+  const sum = `${formatTokens(tokenTotal(tokens))} total`
+  const parts = [
+    `New input ${formatTokens(tokens.input)}`,
+    `Output ${formatTokens(tokens.output)}`,
+    `Cache reads ${formatTokens(tokens.cacheRead)}`,
+    `Cache writes ${formatTokens(tokens.cacheWrite)}`,
+  ]
+  return (
+    <Box flexDirection="column" width={width}>
+      <Text wrap="truncate-end">
+        <Text color={MUTED}>{spaced(label)} </Text>
+        <Text color={HAIRLINE}>{'─'.repeat(Math.max(0, width - spaced(label).length - sum.length - 2))}</Text>
+        <Text bold color={TEXT}> {sum}</Text>
+      </Text>
+      {entries.map(([model, n]) => {
+        const filled = barCells(n, max, barWidth)
+        return (
+          <Text key={`tokens-${model}`} wrap="truncate-end">
+            <Text color={BLUE}>● </Text>
+            <Text color={TEXT}>{fit(modelLabel(model), labelWidth)}</Text>
+            <Text color={BLUE}>{'━'.repeat(filled)}</Text>
+            <Text color={HAIRLINE}>{'─'.repeat(barWidth - filled)}</Text>
+            <Text bold color={TEXT}>{formatTokens(n).padStart(countWidth)}</Text>
+            <Text color={MUTED}>{' tokens'.padStart(unitWidth)}</Text>
+          </Text>
+        )
+      })}
+      <Text color={MUTED} wrap="wrap">{parts.join('  ·  ')}</Text>
+    </Box>
+  )
+}
+
 // A chart three rows tall, then one summary line.
 function drawChart(
   table: Table,
@@ -432,7 +492,7 @@ export function registerReport(on: On) {
     }
     await $.command.register({
       name: 'report',
-      description: 'Work Report: tasks done, hours saved and their worth (settings: /report settings)',
+      description: 'Work Report: tasks done, hours saved, their worth and tokens used (settings: /report settings)',
       argumentHint: '[settings]',
       immediate: true,
     })
@@ -493,21 +553,29 @@ export function registerReport(on: On) {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // A typed request that ends with an answer is one task; a cancelled or failed one is not.
+  // A typed request that ends with an answer is one task; a cancelled or failed one is not. Every
+  // turn's tokens count, a helper's or a cancelled one's too, since they were spent all the same.
   on('turn.complete', { turnId: /^/ }, async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
     try {
-      const pending = await read($, reportPending)
-      await update($, reportPending, () => null)
-      if (pending !== null && e.reason === 'answer') {
-        const kind = classify(pending)
+      const isMain = e.agentId === undefined
+      const pending = isMain ? await read($, reportPending) : null
+      if (isMain) await update($, reportPending, () => null)
+      const isTask = pending !== null && e.reason === 'answer'
+      const usage = e.usage !== undefined && tokenTotal(usageTokens(e.usage)) > 0 ? e.usage : undefined
+      if (isTask || usage !== undefined) {
+        const kind = isTask ? classify(pending) : null
         const model = e.usage?.model ?? (await $.session.model())
         const today = await refreshToday($)
-        const saved = await update($, reportDays, all => ({ ...all, [today]: recordTask(all[today], kind, model) }))
-        await $.store.set(`${DAY_PREFIX}${today}`, saved[today])
+        const saved = await update($, reportDays, all => {
+          let day = all[today]
+          if (kind !== null) day = recordTask(day, kind, model)
+          if (usage !== undefined) day = recordTokens(day, usage)
+          return day === undefined ? all : { ...all, [today]: day }
+        })
+        if (saved[today] !== undefined) await $.store.set(`${DAY_PREFIX}${today}`, saved[today])
       }
     } catch {
-      // This task goes uncounted.
+      // This turn goes uncounted.
     }
     return next(e)
   }).catch(($, e, next) => next(e))

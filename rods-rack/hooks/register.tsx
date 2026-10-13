@@ -13,6 +13,8 @@ import { autoStatusText, familyFor, guessLevel, isShortReply, parseLevel, SORT_S
 import { registerCleanView } from './clean-view'
 import { DOCK_PANE, registerDock } from './dock'
 import { REPORT_PANE, registerReport } from './report'
+import { registerTv, TV_PANE } from './tv'
+import { isPlaying, OFF_STATE } from './tv-logic'
 import { badge, composeStatus, HELPER_OPTIONS, IDLE_MISSION, isBigTeam, SIZES } from './dock-logic'
 
 // Edit this to change what "Create photo or video" asks for.
@@ -83,6 +85,8 @@ const dockFolded = atom({ plugin: 'rods-rack', key: 'dockFolded' } as const, fal
 const dockMission = atom({ plugin: 'rods-rack', key: 'dockMission' } as const, IDLE_MISSION)
 // Written by Clean View's turn.start and turn.complete (clean-view.tsx).
 const isWorking = atom({ plugin: 'rods-rack', key: 'isWorking' } as const, false)
+// Owned by YouTube TV (tv.tsx); its footer chip shows when it plays.
+const tv = atom({ plugin: 'rods-rack', key: 'tv' } as const, OFF_STATE)
 
 type Dollar = EngineInterface
 
@@ -187,6 +191,13 @@ async function openDock($: Dollar) {
 async function openReport($: Dollar) {
   const opened = await $.ui.open({ id: REPORT_PANE, title: 'Work Report', columns: 80 })
   if (!opened.isPlaced) $.ui.toast('The window is too narrow to show the Work Report. Widen it and type /report again.')
+}
+
+// YouTube TV's remote, from the footer chip or the panel's launcher (a press, so asked). The TV
+// itself comes on from its own POWER button or a channel.
+async function openTv($: Dollar) {
+  const opened = await $.ui.open({ id: TV_PANE, title: 'YouTube TV', columns: 64 })
+  if (!opened.isPlaced) $.ui.toast('The window is too narrow to show YouTube TV. Widen it and type /tv again.')
 }
 
 // The panel's Team size row: up to 20 is set at once; a big team, or Custom, finishes in the dock.
@@ -333,7 +344,7 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
       )}
       <Text> </Text>
       {heading('LAUNCH')}
-      <Box flexDirection="row" gap={4}>
+      <Box flexDirection="row" flexWrap="wrap" columnGap={4}>
         <Button
           key="launch-create"
           plain
@@ -349,6 +360,9 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
         </Button>
         <Button key="launch-report" plain onPress={() => void openReport($)}>
           ▤ Work Report
+        </Button>
+        <Button key="launch-tv" plain onPress={() => void openTv($)}>
+          ▣ YouTube TV
         </Button>
       </Box>
     </Box>
@@ -369,6 +383,7 @@ export const register: Register = on => {
   // The dock first, so its hooks sit above Clean View's.
   registerDock(on)
   registerReport(on)
+  registerTv(on)
   registerCleanView(on)
 
   on('session.start', async ($, e, next) => {
@@ -445,10 +460,11 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // The chips at the right end of the prompt footer, beside any mode labels: Auto Model's switch,
-  // then the panel's.
+  // the Work Report, YouTube TV, then the panel's.
   on('ui.render', { component: 'SessionMode' }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const isAuto = (await read($, prefs)).autoModel
+    const isTvPlaying = isPlaying(await read($, tv))
 
     return (
       <Box flexDirection="row" gap={1}>
@@ -462,6 +478,9 @@ export const register: Register = on => {
         </Button>
         <Button key="report-chip" plain onPress={() => void openReport($)}>
           <Text color={LIGHT} backgroundColor={SLATE}> ◆ Report </Text>
+        </Button>
+        <Button key="tv-chip" plain onPress={() => void openTv($)}>
+          <Text color={LIGHT} backgroundColor={SLATE}>{isTvPlaying ? ' ▣ TV ▶ ' : ' ▣ TV '}</Text>
         </Button>
         <Button key="rack-chip" plain onPress={() => void togglePanel($)}>
           <Text color={INK} backgroundColor={ORANGE}> ◆ Rods Rack ▾ </Text>

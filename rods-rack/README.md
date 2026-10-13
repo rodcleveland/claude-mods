@@ -15,7 +15,7 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
 - **Team size**: how many helper agents each request is split across (1, 3, 5, 10, 20, 50, 100 or
   Custom). The same setting as the Agent Dock's (see below).
 - **Launch**: *Create photo or video* (edit `CREATE_PROMPT` in `hooks/register.tsx`), the
-  **Agent Dock** and the **Work Report**.
+  **Agent Dock**, the **Work Report** and **YouTube TV**.
 
 Your choices are saved and come back in new sessions and after `/clear`, `/resume` and `/branch`.
 
@@ -117,8 +117,8 @@ in parallel, with a pane that shows each helper as a card.
 
 ## Work Report
 
-A pane of what Claude has finished for you: tasks done, an estimate of the hours that saved, and
-what that time is worth, with Today, Week (last 7 days), Month (last 30 days) and Year (January 1
+A pane of what Claude has finished for you: tasks done, an estimate of the hours that saved, what
+that time is worth, and the tokens used, with Today, Week (last 7 days), Month (last 30 days) and Year (January 1
 through today) tabs.
 
 - **Open it**: `/report`, the `◆ Report` chip in the footer, or ▤ Work Report in the panel.
@@ -138,6 +138,12 @@ through today) tabs.
 - **The estimate**: minutes saved per task (Emails 10, Documents 30, Images and video 20, Artifacts
   30, Research 25, Coding 20, Other 10) at $50 an hour. `/report settings` lists them; `/report settings rate 75` or
   `/report settings emails 15` changes one. Hours and dollars are always labelled as estimates.
+- **Tokens used**: every token the API counted that day, from each turn's usage: yours, helper
+  agents', and turns that were cancelled or finished no task, since they were spent all the same.
+  The section shows the total, a bar per model, and the four parts: new input, output, cache reads
+  (the conversation re-read from the prompt cache, usually most of the total) and cache writes.
+  Plugin side calls (`$.model.complete`, such as Clean View's job names) and compaction are not
+  counted. Days saved before 0.6.0 have no tokens, and the section is hidden when a stretch has none.
 - **Saved data**: one record per calendar day in Rods Rack's store (`report:day:YYYY-MM-DD`), plus
   the settings. Days are your local dates, read from the system clock and stepped at noon.
 - **Past history**: `scripts/report-history.py` estimates the days before the report was installed
@@ -147,8 +153,63 @@ through today) tabs.
   (it keeps the first run's cutoff, so nothing is counted twice). `--refresh` moves the cutoff up
   to now; tasks the live report already recorded earlier on that day are then counted twice.
   Sessions run from `/tmp` are skipped. On the cutoff day the estimate and the live count are
-  added together.
+  added together. It also counts past tokens, from every saved response (helpers' included, each
+  response once even when a resumed session repeats it), up to its own `tokensUntil`: the first run
+  that counted tokens. Run it once before restarting into a version that counts tokens live, so
+  the two meet without a gap or overlap.
 - The plain logic is in `hooks/report-logic.ts`; the pane and hooks in `hooks/report.tsx`.
+
+## YouTube TV
+
+Something to watch while you wait: a retro TV in a pane that works as the remote, and YouTube's
+own embedded player in a browser tab.
+
+```
+╭────────────────────────────────────────────────╮
+│ ╭──────────────────────────────────╮     02    │
+│ │ STUDY MUSIC                      │           │
+│ │ Ambient Study Music To           │  CH▲  CH▼ │
+│ │ Concentrate - 4 Hours of Music…  │  VOL+ VOL−│
+│ │ Quiet Quest - Study Music        │  ⏻ POWER  │
+│ │ ▶ PLAYING                   1/15 │           │
+│ ╰──────────────────────────────────╯           │
+│          R R - 1 9 9 0     C O L O R   T V     │
+╰────────────────────────────────────────────────╯
+NOW PLAYING  Ambient Study Music To Concentrate…
+ ⏮    ❚❚    ⏭   VOL ▮▮▮▮▮▯▯▯▯▯  50
+CHANNELS  1 AI Made Easy  2 Study Music  3 AI News  4 90s TV Shows  5 90s Music
+SEARCH: Search YouTube or paste a link
+```
+
+- **Open the remote**: `/tv`, the `▣ TV` chip in the footer (`▣ TV ▶` while it plays), or
+  ▣ YouTube TV in the panel. Opening it plays nothing: the TV comes on only when you press POWER or
+  a channel, search, or paste a link.
+- **The picture is in the browser, not the terminal.** The first time it comes on, the mod starts
+  `scripts/tv-server.mjs`, a small program serving `scripts/tv-page.html` on `127.0.0.1` at a
+  random port with a random token, and opens it in the browser `$BROWSER` names (Windows Chrome
+  from WSL), else `xdg-open` or `open`. The pane sends it commands; the page reports what is
+  playing. Chrome lets a page start sound only after a click, so the first video plays muted until
+  you click the tab once.
+- **Channels** are YouTube searches run with `yt-dlp` (15 videos each, kept for the session). The
+  first five are AI Made Easy, Study Music, AI News, 90s TV Shows and 90s Music. Videos whose owners
+  turned off embedding are skipped.
+- **`/tv` words**: `/tv 1` to `/tv 9` for a channel, `up`, `down`, `vol 40`, `vol +`, `vol -`,
+  `pause`, `play`, `next`, `prev`, `off`, `window` (open the tab again), `search lofi jazz`, a
+  YouTube video or playlist link, or any other words as a search.
+- **Pausing for you**: when Claude finishes its turn, or stops to ask for a permission or an
+  answer, the TV pauses and says why. Press ▶ to carry on. Helper agents finishing do not pause it.
+  `/tv settings autopause off` turns this off.
+- **Settings**: `/tv settings` lists the channels, the volume and pausing.
+  `/tv settings channel 2 Jazz Piano = smooth jazz piano` changes or adds a channel (up to 9),
+  `/tv settings remove 6` removes one, and `/tv settings reset` puts the first five back. The
+  volume and the last channel are saved too.
+- **Off**: POWER, `/tv off`, or leaving Claude Code stops the program, and the browser tab shows
+  that the TV is off. `/clear` and `/resume` keep it playing. If Rods Rack stops answering, the
+  program closes itself after two minutes.
+- **Needs** `node` and `yt-dlp` on the PATH. Why not in the terminal: Windows Terminal has no
+  image protocol for panes, so video would be a coarse block mosaic, and YouTube's terms allow its
+  embedded player but not downloading or re-drawing its streams.
+- The plain logic is in `hooks/tv-logic.ts`; the pane and hooks in `hooks/tv.tsx`.
 
 ## Install
 
@@ -203,7 +264,7 @@ Hooks:
 - `command.run` on `automodel`: Auto Model on, off and status.
 - `classic.PostModelSwitch`: a model picked with `/model` or the picker turns Auto Model off.
 - `classic.StopFailure` on `model_not_found`: Auto Model steps down past that model.
-- `ui.render` on `SessionMode`: the footer chips (Auto Model, then Rods Rack).
+- `ui.render` on `SessionMode`: the footer chips (Auto Model, Report, TV, then Rods Rack).
 - `ui.render` on `AbovePrompt`: the control panel, below whatever else the band draws.
 
 Clean View's hooks live in `hooks/clean-view.tsx` (`registerCleanView(on)`):
@@ -245,9 +306,20 @@ The Work Report's hooks live in `hooks/report.tsx` (`registerReport(on)`):
 - `ui.render` on `Pane` `rods-rack-report`: the report.
 - `prompt.submit` from the composer: a prompt you typed starts a task.
 - `tool.call`: each tool the request and its helpers use, for the task's kind.
-- `turn.complete`: a typed request that ended with an answer is recorded for today.
+- `turn.complete`: a typed request that ended with an answer is recorded for today, and every
+  turn's tokens (a helper's too) are added to today.
+
+YouTube TV's hooks live in `hooks/tv.tsx` (`registerTv(on)`):
+
+- `session.start`: load the channels and volume; register `/tv`.
+- `command.run` on `tv`: open the remote, tune, change volume, play and pause, or settings; it
+  answers at once and slow work (search, starting the player) runs after.
+- `ui.render` on `Pane` `rods-rack-tv`: the TV and its remote.
+- `turn.complete` (the main conversation's) and `classic.Notification` on permission prompts and
+  questions: pause when Claude finishes or needs you.
+- `session.end`: turn the TV off, except on `/clear` and `/resume`.
 
 `$` calls: `$.agent.list`, `$.clock.after`, `$.clock.every`, `$.clock.now`, `$.command.register`,
 `$.model.complete`, `$.prompt.submit`, `$.state.get`, `$.state.set`, `$.store.get`, `$.store.set`,
-`$.env.get`, `$.fs.read`, `$.process.run`, `$.session.model`, `$.store.keys`, `$.tool.register`, `$.ui.close`, `$.ui.invalidate`, `$.ui.log`,
+`$.env.get`, `$.fs.read`, `$.http.fetch`, `$.process.run`, `$.process.spawn`, `$.session.model`, `$.store.keys`, `$.tool.register`, `$.ui.close`, `$.ui.invalidate`, `$.ui.log`,
 `$.ui.open`, `$.ui.panes`, `$.ui.resolve`, `$.ui.status`, `$.ui.toast`.
