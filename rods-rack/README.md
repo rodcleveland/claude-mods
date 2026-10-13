@@ -15,7 +15,9 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
 - **Team size**: how many helper agents each request is split across (1, 3, 5, 10, 20, 50, 100 or
   Custom). The same setting as the Agent Dock's (see below).
 - **Launch**: *Create photo or video* (edit `CREATE_PROMPT` in `hooks/register.tsx`), the
-  **Agent Dock**, the **Work Report** and **YouTube TV**.
+  **Agent Dock**, the **Work Report**, **YouTube TV** and **⌸ Open Notepad**, which starts Windows
+  Notepad through PowerShell (`powershell.exe` on the PATH, else its usual path under `/mnt/c`; a
+  toast says so if neither runs).
 
 Your choices are saved and come back in new sessions and after `/clear`, `/resume` and `/branch`.
 

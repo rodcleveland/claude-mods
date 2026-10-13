@@ -200,6 +200,23 @@ async function openTv($: Dollar) {
   if (!opened.isPlaced) $.ui.toast('The window is too narrow to show YouTube TV. Widen it and type /tv again.')
 }
 
+// Windows Notepad, from the panel's launcher: PowerShell starts it and returns at once. From WSL
+// powershell.exe is usually on the PATH; if not, its usual place under /mnt/c is tried.
+const POWERSHELLS = ['powershell.exe', '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe']
+const NOTEPAD_ARGS = ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process notepad.exe']
+
+async function openNotepad($: Dollar) {
+  for (const shell of POWERSHELLS) {
+    try {
+      const ran = await $.process.run([shell, ...NOTEPAD_ARGS], { timeoutMs: 15_000 })
+      if (ran.exitCode === 0) return
+    } catch {
+      // Try the next.
+    }
+  }
+  $.ui.toast("Notepad didn't open: PowerShell wasn't found, or it couldn't start Notepad.")
+}
+
 // The panel's Team size row: up to 20 is set at once; a big team, or Custom, finishes in the dock.
 async function pickTeamSize($: Dollar, size: number | 'custom') {
   if (size === 'custom') {
@@ -363,6 +380,9 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
         </Button>
         <Button key="launch-tv" plain onPress={() => void openTv($)}>
           ▣ YouTube TV
+        </Button>
+        <Button key="launch-notepad" plain onPress={() => void openNotepad($)}>
+          ⌸ Open Notepad
         </Button>
       </Box>
     </Box>

@@ -142,3 +142,53 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await band.find({ key: 'toggle-clean-view' })).toBeUndefined()
   })
 }
+
+// Open Notepad: PowerShell starts Windows Notepad; its usual path under /mnt/c is the fallback, and a
+// toast says so when neither runs. The engine records each program run and answers as `answer` says.
+function notepadEngine(on: On, answer: (argv: string[]) => number | 'missing') {
+  const clock = mock.clock(on)
+  mock.env(on, {})
+  on('classic.SessionStart', () => ({}) as never)
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => $.ui.resolve(e).Box({}))
+  mock.store(on)
+  const ran: string[][] = []
+  const toasts: string[] = []
+  on('process.run', ($, e) => {
+    ran.push([...e.argv])
+    const code = answer([...e.argv])
+    if (code === 'missing') throw new Error(`spawn ${e.argv[0]} ENOENT`)
+    return { value: { exitCode: code, stdout: '', stderr: '' } } as never
+  })
+  on('ui.toast', ($, e) => {
+    toasts.push((e as { text: string }).text)
+    return { value: undefined } as never
+  })
+  return { clock, ran, toasts }
+}
+
+const NOTEPAD_ARGS = ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process notepad.exe']
+
+test('Open Notepad sits in the launch area with its notepad icon and starts Notepad through PowerShell', async ($, on) => {
+  const { clock, ran, toasts } = notepadEngine(on, () => 0)
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+
+  expect((await panel.find({ key: 'launch-notepad' }))?.text).toContain('⌸ Open Notepad')
+  await panel.press({ key: 'launch-notepad' })
+  await clock.settle()
+
+  expect(ran).toEqual([['powershell.exe', ...NOTEPAD_ARGS]])
+  expect(toasts).toHaveLength(0)
+})
+
+test('Open Notepad tries PowerShell by its full path, then says so if neither runs', async ($, on) => {
+  const { clock, ran, toasts } = notepadEngine(on, argv => (argv[0] === 'powershell.exe' ? 'missing' : 1))
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+
+  await panel.press({ key: 'launch-notepad' })
+  await clock.settle()
+
+  expect(ran.map(argv => argv[0])).toEqual(['powershell.exe', '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'])
+  expect(toasts).toEqual(["Notepad didn't open: PowerShell wasn't found, or it couldn't start Notepad."])
+})
