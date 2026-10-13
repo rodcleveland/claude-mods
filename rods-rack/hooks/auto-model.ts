@@ -1,4 +1,4 @@
-import type { RackAutoLevel, RackFamily } from '../types'
+import type { RackAutoLevel, RackEffort, RackFamily, RackPrefs } from '../types'
 
 // Auto Model's plain logic, with no engine calls: reading the sorter's answer, spotting a short
 // reply, the word-based fallback, and the step from a level to a model line.
@@ -72,4 +72,27 @@ export const FAMILY_LABELS: Readonly<Record<RackFamily, string>> = {
 export function autoStatusText(isOn: boolean, model: RackFamily | null): string | null {
   if (!isOn) return null
   return `Auto · ${model === null ? 'waiting for a prompt' : FAMILY_LABELS[model]}`
+}
+
+// Each effort level's name, for the panel and the status line.
+export const EFFORT_LABELS: Readonly<Record<RackEffort, string>> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
+}
+
+// What the panel pins, shown so the status line matches the model and effort Claude really uses. A model
+// Auto Model picks has its own entry, so only the effort is named then.
+export function pinnedText(p: RackPrefs): string | null {
+  const parts = [p.model !== null && !p.autoModel ? FAMILY_LABELS[p.model] : null, p.effort !== null ? EFFORT_LABELS[p.effort] : null]
+  const shown = parts.filter((x): x is string => x !== null)
+  return shown.length > 0 ? `Rods Rack: ${shown.join(' · ')}` : null
+}
+
+// The model and effort entries for the status line: Auto Model's, then the panel's pins. Null when neither shows.
+export function modelStatusText(p: RackPrefs): string | null {
+  const lines = [autoStatusText(p.autoModel, p.model), pinnedText(p)].filter((x): x is string => x !== null)
+  return lines.length > 0 ? lines.join('  ·  ') : null
 }

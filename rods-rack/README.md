@@ -3,7 +3,12 @@
 A Claude Code mod that adds an orange `◆ Rods Rack ▾` chip to the right end of the prompt footer.
 Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control panel for:
 
-- **Model** and **effort** for the main conversation.
+- **Model** and **effort** for the main conversation. A pick in the panel is pinned: every request uses it,
+  and the status line says so (`Rods Rack: Haiku 5.5 · XHigh`). **Default** in either row hands control
+  back to the session; a model pick or Default in the Model row turns Auto Model off. A native `/model`
+  or `/effort` does not clear a pin: in a live check the model-switch event never reached the plugin
+  (`classic.PostModelSwitch`), and Claude Code does not send `/effort` to plugins at all. Press
+  **Default** to hand control back.
 - **Clean View**: tool calls, diffs and command output hidden, and a plain checklist of the job
   above the prompt (see below). The same switch as `/simple`.
 - **Prompt Upgrade**: your prompt is rewritten by Haiku to be clearer before it is sent. If the
@@ -80,9 +85,10 @@ into one of four levels, and the main conversation runs on that level's model:
 - **Controls**: the panel row, the footer chip, `/automodel on`, `/automodel off`, `/automodel status`.
   Turning it off puts back the model you had before. Picking a model by hand (the panel's Model row,
   `/model` or the model picker) turns it off. The setting is saved across sessions.
-- **What you see**: only the status-line entry `Auto · <model>`. The session's own model name in your
-  status line does not change, because plugins cannot set the session's model; like the Model row,
-  Auto Model swaps the model on each main-conversation request.
+- **What you see**: the status-line entry `Auto · <model>`, and a `Rods Rack: …` entry beside it when
+  the panel pins an effort. The session's own model name in your status line does not change, because
+  plugins cannot set the session's model; like the Model row, Auto Model swaps the model on each
+  main-conversation request.
 - **Costs**: one tiny Haiku call per sorted prompt. Substantial prompts go to Opus and the hardest
   to Fable, which uses a plan's limits faster than working on Sonnet. With Prompt Upgrade on too,
   the two Haiku calls run at the same time.
@@ -265,7 +271,8 @@ Hooks:
 - `classic.SessionStart`: reload saved settings after `/clear`, `/resume` and `/branch`.
 - `command.run` on `tools` and `rods-rack`: toggle the panel.
 - `command.run` on `automodel`: Auto Model on, off and status.
-- `classic.PostModelSwitch`: a model picked with `/model` or the picker turns Auto Model off.
+- `classic.PostModelSwitch`: a model picked with `/model` or the picker clears the panel's pinned model
+  and turns Auto Model off. In a live check the event did not arrive for `/model`, so this may not run.
 - `classic.StopFailure` on `model_not_found`: Auto Model steps down past that model.
 - `ui.render` on `SessionMode`: the footer chips (Auto Model, Report, TV, then Rods Rack).
 - `ui.render` on `AbovePrompt`: the control panel, below whatever else the band draws.

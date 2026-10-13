@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderElement, RenderInput } from 'claude-code'
 
 import type { DockCard, DockMission, RackPrefs } from '../types'
-import { autoStatusText, isShortReply } from './auto-model'
+import { isShortReply, modelStatusText } from './auto-model'
 import { IDLE as IDLE_CHECKLIST } from './clean-view'
 import {
   addQueued,
@@ -105,7 +105,7 @@ async function refreshStatus($: Dollar) {
   const p = await read($, prefs)
   const isFolded = await read($, dockFolded)
   const mission = await read($, dockMission)
-  $.ui.status(composeStatus(autoStatusText(p.autoModel, p.model), isFolded ? badge(mission) : null))
+  $.ui.status(composeStatus(modelStatusText(p), isFolded ? badge(mission) : null))
 }
 
 async function changeMission($: Dollar, fn: (m: DockMission) => DockMission) {

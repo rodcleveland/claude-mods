@@ -9,7 +9,7 @@ import type {
   RackSeen,
   RackUpgrade,
 } from '../types'
-import { autoStatusText, familyFor, guessLevel, isShortReply, parseLevel, SORT_SYSTEM } from './auto-model'
+import { EFFORT_LABELS, familyFor, guessLevel, isShortReply, modelStatusText, parseLevel, SORT_SYSTEM } from './auto-model'
 import { registerCleanView } from './clean-view'
 import { DOCK_PANE, registerDock } from './dock'
 import { REPORT_PANE, registerReport } from './report'
@@ -53,13 +53,10 @@ const MODELS: ReadonlyArray<{ family: RackFamily; label: string; id: string }> =
   { family: 'opus', label: 'Opus 5.5', id: 'claude-opus-5-5' },
   { family: 'fable', label: 'Fable 5.1', id: 'claude-fable-5-1' },
 ]
-const EFFORTS: ReadonlyArray<{ value: RackEffort; label: string }> = [
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'xhigh', label: 'XHigh' },
-  { value: 'max', label: 'Max' },
-]
+const EFFORTS: ReadonlyArray<{ value: RackEffort; label: string }> = (Object.keys(EFFORT_LABELS) as RackEffort[]).map(value => ({
+  value,
+  label: EFFORT_LABELS[value],
+}))
 
 const DEFAULT_PREFS: RackPrefs = {
   model: null,
@@ -103,12 +100,20 @@ async function hydrate($: Dollar) {
     const { cleanView: _old, ...kept } = saved as Partial<RackPrefs> & { cleanView?: unknown }
     await update($, prefs, () => ({ ...DEFAULT_PREFS, ...kept }))
   }
+  // /clear reloads the saved picks; the status line shows them again.
+  await showAutoStatus($, await read($, prefs))
   $.ui.invalidate('ui.render')
 }
 
 async function setPrefs($: Dollar, change: (p: RackPrefs) => RackPrefs) {
   const next = await update($, prefs, change)
   await $.store.set(STORE_KEY, next)
+}
+
+// A pick in the panel's model or effort rows: saved, and the status line says what is pinned.
+async function pin($: Dollar, change: (p: RackPrefs) => RackPrefs) {
+  await setPrefs($, change)
+  await showAutoStatus($, await read($, prefs))
 }
 
 const labelOf = (family: RackFamily | null) => MODELS.find(m => m.family === family)?.label ?? 'Default'
@@ -118,7 +123,7 @@ const labelOf = (family: RackFamily | null) => MODELS.find(m => m.family === fam
 async function showAutoStatus($: Dollar, p: RackPrefs) {
   const isFolded = await read($, dockFolded)
   const mission = await read($, dockMission)
-  $.ui.status(composeStatus(autoStatusText(p.autoModel, p.model), isFolded ? badge(mission) : null))
+  $.ui.status(composeStatus(modelStatusText(p), isFolded ? badge(mission) : null))
 }
 
 // On: remember the model in use to go back to. Off: go back to it.
@@ -287,6 +292,9 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
       <Text> </Text>
       <Box flexDirection="row" flexWrap="wrap">
         <Text dimColor>{'MODEL   '}</Text>
+        <Button key="model-default" plain onPress={() => void pickModelByHand($, null)}>
+          {chip(p.model === null, 'Default', ORANGE)}
+        </Button>
         {MODELS.map(m => (
           <Button
             key={`model-${m.family}`}
@@ -294,15 +302,18 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
             {...(m.family === activeFamily ? { autoFocus: true as const } : {})}
             onPress={() => void pickModelByHand($, m.family)}
           >
-            {chip(m.family === activeFamily, m.label, ORANGE)}
+            {chip(m.family === p.model, m.label, ORANGE)}
           </Button>
         ))}
       </Box>
       <Box flexDirection="row" flexWrap="wrap">
         <Text dimColor>{'EFFORT  '}</Text>
+        <Button key="effort-default" plain onPress={() => void pin($, y => ({ ...y, effort: null }))}>
+          {chip(p.effort === null, 'Default', PURPLE)}
+        </Button>
         {EFFORTS.map(x => (
-          <Button key={`effort-${x.value}`} plain onPress={() => void setPrefs($, y => ({ ...y, effort: x.value }))}>
-            {chip(x.value === activeEffort, x.label, PURPLE)}
+          <Button key={`effort-${x.value}`} plain onPress={() => void pin($, y => ({ ...y, effort: x.value }))}>
+            {chip(x.value === p.effort, x.label, PURPLE)}
           </Button>
         ))}
       </Box>
@@ -463,9 +474,7 @@ export const register: Register = on => {
   // /model or the model picker is a pick by hand: Auto Model turns off, and the panel's own model
   // choice is cleared so the session's new model is the one used.
   on('classic.PostModelSwitch', async ($, e, next) => {
-    if ((e.source === 'command' || e.source === 'picker') && (await read($, prefs)).autoModel) {
-      await pickModelByHand($, null)
-    }
+    if (e.source === 'command' || e.source === 'picker') await pickModelByHand($, null)
     return next(e)
   }).catch(($, e, next) => next(e))
 

@@ -192,3 +192,70 @@ test('Open Notepad tries PowerShell by its full path, then says so if neither ru
   expect(ran.map(argv => argv[0])).toEqual(['powershell.exe', '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'])
   expect(toasts).toEqual(["Notepad didn't open: PowerShell wasn't found, or it couldn't start Notepad."])
 })
+
+test('the Default chips hand the model and effort back to the session', async ($, on) => {
+  const writes = engine(on, { prefs: { ...PREFS, model: 'haiku', effort: 'max' } })
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+
+  await panel.press({ key: 'model-default' })
+  await panel.press({ key: 'effort-default' })
+  expect(writes.at(-1)).toMatchObject({ key: 'prefs', value: { model: null, effort: null } })
+
+  await panel.press({ key: 'model-opus' })
+  expect(writes.at(-1)).toMatchObject({ key: 'prefs', value: { model: 'opus' } })
+})
+
+test('a pinned model and effort show on the status line; clearing them empties it', async ($, on) => {
+  engine(on)
+  const status: Array<string | undefined> = []
+  on('ui.status', ($, e) => {
+    status.push((e as { text?: string }).text)
+    return { value: undefined } as never
+  })
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+
+  await panel.press({ key: 'model-haiku' })
+  await panel.press({ key: 'effort-xhigh' })
+  expect(status.at(-1)).toBe('Rods Rack: Haiku 5.5 · XHigh')
+
+  await panel.press({ key: 'model-default' })
+  await panel.press({ key: 'effort-default' })
+  expect(status.at(-1)).toBeUndefined()
+})
+
+test('the Default model chip turns Auto Model off, the way a model pick does', async ($, on) => {
+  const writes = engine(on, { prefs: { ...PREFS, autoModel: true, model: 'haiku', autoPrevious: 'opus' } })
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+
+  await panel.press({ key: 'model-default' })
+  expect(writes.at(-1)).toMatchObject({ key: 'prefs', value: { model: null, autoModel: false, autoPrevious: null } })
+})
+
+test('with Auto Model on, a pinned effort shows beside the Auto entry', async ($, on) => {
+  engine(on, { prefs: { ...PREFS, autoModel: true, model: 'opus' } })
+  const status: Array<string | undefined> = []
+  on('ui.status', ($, e) => {
+    status.push((e as { text?: string }).text)
+    return { value: undefined } as never
+  })
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+
+  await panel.press({ key: 'effort-high' })
+  expect(status.at(-1)).toBe('Auto · Opus 5.5  ·  Rods Rack: High')
+})
+
+test('/clear shows the saved pins on the status line again', async ($, on) => {
+  engine(on, { prefs: { ...PREFS, model: 'haiku', effort: 'xhigh' } })
+  const status: Array<string | undefined> = []
+  on('ui.status', ($, e) => {
+    status.push((e as { text?: string }).text)
+    return { value: undefined } as never
+  })
+
+  await start($, 'clear')
+  expect(status.at(-1)).toBe('Rods Rack: Haiku 5.5 · XHigh')
+})

@@ -117,7 +117,8 @@ test('turning it off goes back to the earlier model', async ($, on) => {
   expect((await $.command.run({ command: 'automodel', args: 'status' } as never)).text).toContain('Fable 5.1')
   await $.command.run({ command: 'automodel', args: 'off' } as never)
   expect(prefs()).toMatchObject({ autoModel: false, model: 'haiku' })
-  expect(status.at(-1)).toBeUndefined()
+  // Haiku is pinned again, so the status line says so: the requests really go to it.
+  expect(status.at(-1)).toBe('Rods Rack: Haiku 5.5')
 })
 
 test('a model picked by hand turns Auto Model off', async ($, on) => {
@@ -131,4 +132,17 @@ test('a model picked by hand turns Auto Model off', async ($, on) => {
     source: 'command',
   } as never)
   expect(prefs()).toMatchObject({ autoModel: false, model: null })
+})
+
+test('a /model switch clears a model pinned in the panel, even with Auto Model off', async ($, on) => {
+  const { prefs } = engine(on, { prefs: { ...PREFS, autoModel: false, model: 'haiku' } }, null)
+  await $.classic.SessionStart({ source: 'startup' })
+
+  await $.classic.PostModelSwitch({
+    from_model: 'claude-haiku-5-5',
+    to_model: 'claude-opus-5-5',
+    requested_model: 'opus',
+    source: 'command',
+  } as never)
+  expect(prefs()).toMatchObject({ model: null, autoModel: false })
 })

@@ -252,3 +252,23 @@ test('/dock folds the pane to the status-line badge and back', async ($, on) => 
   release()
   await Promise.all(calls)
 })
+
+test('a pinned model stays on the status line when the dock folds', async ($, on) => {
+  const { panes, status, clock, hold } = engine(on, {
+    prefs: { model: 'haiku', effort: null, promptUpgrade: false, helper: 'same', autoModel: false, autoPrevious: null, autoUnavailable: [] },
+  })
+  await start($)
+  await $.command.run({ command: 'dock', args: '3' } as never)
+  await $.command.run({ command: 'dock', args: '' } as never)
+  await clock.settle()
+
+  await $.prompt.submit(typed('Price check three bakeries'))
+  hold()
+  const calls = ['Panera', 'Crumbl'].map(name => $.tool.call(agent(`Price check: ${name}`)))
+  await clock.settle()
+
+  await $.command.run({ command: 'dock', args: '' } as never)
+  await clock.settle()
+  expect(panes.has('rods-rack-dock')).toBe(false)
+  expect(status.at(-1)).toBe('Rods Rack: Haiku 5.5  ·  2 working · 0 queued · 0 done')
+})
