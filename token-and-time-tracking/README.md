@@ -48,6 +48,17 @@ In the config menu, or under `pluginConfigs` in settings:
 - `idleMinutes` (default 15): gaps longer than this aren't active time.
 - `openOnStart` (default true): open the pane when a session starts.
 
+## Install
+
+At the prompt of a terminal Claude Code session (2.1.275 or later):
+
+```
+/plugin install token-and-time-tracking --marketplace rodcleveland/claude-mods
+```
+
+Answer `y` to add the marketplace, then pick a scope. The repository is private, so this only works
+for accounts with read access to it.
+
 ## Developing
 
 `claude --plugin-dir token-and-time-tracking` loads it straight from the repo.
