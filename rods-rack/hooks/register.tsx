@@ -175,6 +175,14 @@ async function setCleanView($: Dollar, isOn: boolean) {
   $.ui.toast(isOn ? 'Clean View is on' : 'Clean View is off: every step is showing again')
 }
 
+// The Question Pane mod's own switch: it owns the value, so the rack reads it and flips it through
+// the mod's command. Unset means that mod isn't installed, and the row is left out.
+const QUESTION_PANE_SWITCH = { plugin: 'question-pane', key: 'enabled' } as const
+
+async function setQuestionPane($: Dollar, isOn: boolean) {
+  await $.command.run({ command: 'question-pane', args: isOn ? 'on' : 'off' })
+}
+
 async function closePanel($: Dollar) {
   await update($, panelOpen, () => false)
 }
@@ -263,6 +271,7 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
   const effortLabel = EFFORTS.find(x => x.value === activeEffort)?.label ?? 'Default'
   const helper = HELPER_OPTIONS.find(h => h.value === p.helper) ?? HELPER_OPTIONS[0]!
   const teamSize = await read($, dockSize)
+  const questionPane = (await $.state.get(QUESTION_PANE_SWITCH)).value
   const isCustomTeam = !SIZES.includes(teamSize as (typeof SIZES)[number])
 
   const heading = (label: string) =>
@@ -328,6 +337,16 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
         </Button>
       </Box>
       {toggleRow('toggle-prompt-upgrade', 'Prompt Upgrade', 'better prompts', p.promptUpgrade, x => ({ ...x, promptUpgrade: !x.promptUpgrade }))}
+      {typeof questionPane === 'boolean' && (
+        <Box flexDirection="row">
+          <Text color={questionPane ? 'green' : undefined}>{questionPane ? '● ' : '○ '}</Text>
+          <Box width={16}><Text color="white">Question form</Text></Box>
+          <Box flexGrow={1}><Text dimColor>questions in a pane</Text></Box>
+          <Button key="toggle-question-pane" plain onPress={() => void setQuestionPane($, !questionPane)}>
+            {questionPane ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
+          </Button>
+        </Box>
+      )}
       <Box flexDirection="row">
         <Text color={p.helper !== 'same' ? 'green' : undefined}>{p.helper !== 'same' ? '● ' : '○ '}</Text>
         <Box width={16}><Text color="white">Helper agents</Text></Box>

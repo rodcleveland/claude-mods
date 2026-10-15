@@ -259,3 +259,29 @@ test('/clear shows the saved pins on the status line again', async ($, on) => {
   await start($, 'clear')
   expect(status.at(-1)).toBe('Rods Rack: Haiku 5.5 · XHigh')
 })
+
+test('the Question form row is left out when that mod is not installed', async ($, on) => {
+  engine(on)
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+  expect(await panel.find({ key: 'toggle-question-pane' })).toBeUndefined()
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the Question form row flips that mod through its command on ${surface}`, async ($, on) => {
+    engine(on)
+    // Stands for the Question Pane mod: its switch reads on, and its command takes on or off.
+    on('state.get', { plugin: 'question-pane', key: 'enabled' } as never, () => ({ value: { value: true, version: 1 } }) as never)
+    const sent: string[] = []
+    on('command.run', { command: 'question-pane' }, ($, e) => {
+      sent.push(String(e.args))
+      return { text: 'ok' } as never
+    })
+    await start($, 'startup')
+    const panel = await openPanel($, surface)
+
+    expect((await panel.find({ key: 'toggle-question-pane' }))?.text).toContain('On')
+    await panel.press({ key: 'toggle-question-pane' })
+    expect(sent).toEqual(['off'])
+  })
+}

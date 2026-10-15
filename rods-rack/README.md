@@ -13,6 +13,8 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
   above the prompt (see below). The same switch as `/simple`.
 - **Prompt Upgrade**: your prompt is rewritten by Haiku to be clearer before it is sent. If the
   rewrite fails or takes longer than 5 seconds, your original is sent unchanged.
+- **Question form**: turns the Question Pane mod on or off (the same switch as `/question-pane`).
+  The row only shows when that mod is installed; the mod keeps the setting itself.
 - **Auto Model**: picks the model for each new prompt you type (see below). Also the gold
   `Auto Model: On` / slate `Auto Model: Off` chip in the footer, and `/automodel`.
 - **Helper agents**: the model subagents use (Fast & Cheap → Haiku, Balanced → Sonnet, Same as main),

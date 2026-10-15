@@ -148,6 +148,10 @@ export type TvState = {
 
 declare module 'claude-code' {
   interface PluginState {
+    // Read only: the Question Pane mod owns this value (its own contract declares it the same way).
+    'question-pane': {
+      enabled: boolean
+    }
     'rods-rack': {
       prefs: RackPrefs
       panelOpen: boolean

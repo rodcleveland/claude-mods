@@ -11,6 +11,10 @@
     {
       "name": "memory-fork",
       "source": "./memory-fork"
+    },
+    {
+      "name": "question-pane",
+      "source": "./question-pane"
     }
   ]
 }

@@ -1,0 +1,9 @@
+{
+  "name": "question-pane",
+  "version": "0.2.0",
+  "description": "When Claude has several questions for you, they open in a pane with an answer box under each and a Submit button that sends your answers back.",
+  "author": {
+    "name": "Rodman Cleveland"
+  },
+  "types": "./types/index.d.ts"
+}
