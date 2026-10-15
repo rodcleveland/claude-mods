@@ -1,0 +1,23 @@
+{
+  "name": "token-and-time-tracking",
+  "version": "0.1.0",
+  "description": "Tracks tokens and time per session, project and day: a live pane and a /token-time-report command, with the numbers kept in each project.",
+  "author": {
+    "name": "Rodman Cleveland"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "idleMinutes": {
+      "type": "number",
+      "title": "Idle minutes",
+      "description": "A gap between turns longer than this doesn't count as active time.",
+      "default": 15
+    },
+    "openOnStart": {
+      "type": "boolean",
+      "title": "Open the pane when a session starts",
+      "description": "Off, open it with /token-time.",
+      "default": true
+    }
+  }
+}

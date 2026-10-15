@@ -15,6 +15,10 @@
     {
       "name": "question-pane",
       "source": "./question-pane"
+    },
+    {
+      "name": "token-and-time-tracking",
+      "source": "./token-and-time-tracking"
     }
   ]
 }
