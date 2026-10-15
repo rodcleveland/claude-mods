@@ -1,38 +1,27 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Live, SessionRecord, Totals } from '../types'
+import type { Scope, SessionRecord, Tab } from '../types'
+import { INITIAL_LIVE, settings } from './shared'
 import {
   MINUTE,
   addAgentTurn,
-  addTotals,
   addTurn,
   dayKey,
-  dayStart,
-  emptyTotals,
-  formatDuration,
+  dayMap,
   formatReport,
-  formatTokens,
   newRecord,
   parseQuery,
   readUsage,
   resume,
-  sessionTotals,
-  sumTotals,
-  tokenSum,
   touch,
 } from './logic'
+import { PANE, PANE_COLUMNS, PANE_TITLE, drawPane } from './pane'
 
-const PANE = 'token-time'
-const PANE_TITLE = 'Tokens and time'
-const live = atom({ plugin: 'token-and-time-tracking', key: 'live' } as const, {
-  record: null,
-  turnStartedAt: null,
-  projectToday: null,
-  projectAll: null,
-  day: '',
-} as Live)
+const live = atom({ plugin: 'token-and-time-tracking', key: 'live' } as const, INITIAL_LIVE)
 const now = atom({ plugin: 'token-and-time-tracking', key: 'now' } as const, 0)
+const tab = atom({ plugin: 'token-and-time-tracking', key: 'tab' } as const, 'today' as Tab)
+const scope = atom({ plugin: 'token-and-time-tracking', key: 'scope' } as const, 'project' as Scope)
 
 // The central list of every project tracked, so reports can cover them all.
 const INDEX_KEY = 'projects'
@@ -72,9 +61,6 @@ async function projectRoot($: EngineInterface): Promise<string> {
   return repo?.root ?? (await $.session.root())
 }
 
-// Read from the options at each load.
-let idleMs = 15 * MINUTE
-
 // Writes go one at a time, so a slow older write never lands over a newer one.
 let writing: Promise<void> = Promise.resolve()
 function save($: EngineInterface, rec: SessionRecord) {
@@ -84,16 +70,15 @@ function save($: EngineInterface, rec: SessionRecord) {
   return writing
 }
 
-/** This project's other sessions, summed for the pane. */
-async function refreshProjectTotals($: EngineInterface, root: string, sessionId: string, t: number) {
-  const others = (await loadProject($, root)).filter(r => r.sessionId !== sessionId)
-  const day = dayKey(t)
-  await update($, live, l => ({
-    ...l,
-    day,
-    projectToday: sumTotals(others, idleMs, dayStart(day)),
-    projectAll: sumTotals(others, idleMs),
-  }))
+/** Every other session by day, for this project and for all of them: what the pane's longer tabs show. */
+async function refreshHistory($: EngineInterface, root: string, sessionId: string, t: number) {
+  const index = ((await $.store.get(INDEX_KEY)) ?? {}) as ProjectIndex
+  const roots = [...new Set([root, ...Object.keys(index)])]
+  const loaded = await Promise.all(roots.map(r => loadProject($, r)))
+  const others = (records: SessionRecord[]) => records.filter(r => r.sessionId !== sessionId)
+  const project = dayMap(others(loaded[0] ?? []), settings.idleMs)
+  const all = dayMap(others(loaded.flat()), settings.idleMs)
+  await update($, live, l => ({ ...l, day: dayKey(t), history: { project, all } }))
 }
 
 /** Makes sure the pane's record is this session's: starts one, picks a resumed one up, or follows a /clear. */
@@ -116,7 +101,7 @@ async function ensureSession($: EngineInterface): Promise<SessionRecord> {
   await save($, rec)
   const index = ((await $.store.get(INDEX_KEY)) ?? {}) as ProjectIndex
   await $.store.set(INDEX_KEY, { ...index, [root]: { name: rec.project.name, lastSeen: t } })
-  await refreshProjectTotals($, root, id, t)
+  await refreshHistory($, root, id, t)
   return rec
 }
 
@@ -130,11 +115,11 @@ async function heartbeat($: EngineInterface) {
     return { ...l, record: next }
   })
   if (next !== null) await save($, next)
-  if ((await read($, live)).day !== dayKey(t)) await refreshProjectTotals($, rec.project.root, rec.sessionId, t)
+  if ((await read($, live)).day !== dayKey(t)) await refreshHistory($, rec.project.root, rec.sessionId, t)
 }
 
 export const register: Register = (on, options) => {
-  idleMs = Math.max(1, Number(options.idleMinutes ?? 15)) * MINUTE
+  settings.idleMs = Math.max(1, Number(options.idleMinutes ?? 15)) * MINUTE
   const openOnStart = options.openOnStart !== false
 
   on('session.start', async ($, e, next) => {
@@ -144,13 +129,24 @@ export const register: Register = (on, options) => {
       description: 'Report tokens and time: today, yesterday, week, month, all or a date; add all-projects or sessions',
       argumentHint: '[today|week|month|all|YYYY-MM-DD] [all-projects] [sessions]',
     })
+    const savedTab = await $.store.get('tab')
+    const savedScope = await $.store.get('scope')
+    if (typeof savedTab === 'string') await update($, tab, () => savedTab as Tab)
+    if (savedScope === 'all' || savedScope === 'project') await update($, scope, () => savedScope as Scope)
     await ensureSession($)
+    // Other sessions (another terminal, another project) show up within 15 minutes.
+    $.clock.every(15 * MINUTE, () => {
+      void (async () => {
+        const rec = (await read($, live)).record
+        if (rec !== null) await refreshHistory($, rec.project.root, rec.sessionId, await $.clock.now())
+      })()
+    })
     // The pane's clocks tick every second; the session file is saved every minute.
     $.clock.every(1000, () => {
       void $.clock.now().then(t => update($, now, () => t))
     })
     $.clock.every(MINUTE, () => void heartbeat($))
-    if (openOnStart && e.isInteractive) void $.ui.open({ id: PANE, title: PANE_TITLE })
+    if (openOnStart && e.isInteractive) void $.ui.open({ id: PANE, title: PANE_TITLE, columns: PANE_COLUMNS })
     return next(e)
   })
 
@@ -196,7 +192,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'token-time' }, async $ => {
     await ensureSession($)
-    await $.ui.open({ id: PANE, title: PANE_TITLE })
+    await $.ui.open({ id: PANE, title: PANE_TITLE, columns: PANE_COLUMNS, focus: true })
     return { text: 'Tokens and time pane opened.' }
   })
 
@@ -217,54 +213,8 @@ export const register: Register = (on, options) => {
       })),
     )
     projects.sort((a, b) => a.name.localeCompare(b.name))
-    return { text: formatReport(q, projects, idleMs) }
+    return { text: formatReport(q, projects, settings.idleMs) }
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    const l = await read($, live)
-    const t = await read($, now)
-    if (l.record === null) return <Text dimColor>Waiting for the session to start.</Text>
-
-    const rec = touch(l.record, t)
-    const s = sessionTotals(rec, idleMs)
-    const running = l.turnStartedAt === null ? null : Math.max(0, t - l.turnStartedAt)
-    const name = rec.project.name
-    const withSession = (other: Totals | null, from?: number) =>
-      addTotals(other ?? emptyTotals(), sessionTotals(rec, idleMs, from))
-    const today = withSession(l.projectToday, dayStart(dayKey(t)))
-    const all = withSession(l.projectAll)
-
-    const summary = (x: Totals) =>
-      `${formatDuration(x.clockMs)} on the clock · ${formatDuration(x.activeMs)} active · ` +
-      `${formatDuration(x.claudeMs)} Claude · ${formatTokens(tokenSum(x) + tokenSum(x.agentTokens))} tokens · ` +
-      `${x.sessions} session${x.sessions === 1 ? '' : 's'}`
-
-    return (
-      <Box flexDirection="column">
-        <Text bold>{`This session · ${name}`}</Text>
-        <Text>{`On the clock    ${formatDuration(s.clockMs)}   (active ${formatDuration(s.activeMs)})`}</Text>
-        <Text>{`Claude working  ${formatDuration(s.claudeMs)} over ${s.turns} turn${s.turns === 1 ? '' : 's'}`}</Text>
-        {running !== null && <Text color="yellow">{`Working now     ${formatDuration(running)}`}</Text>}
-        <Text>
-          {`Tokens          in ${formatTokens(s.input)} · out ${formatTokens(s.output)} · ` +
-            `cache ${formatTokens(s.cacheRead)} read / ${formatTokens(s.cacheWrite)} write`}
-        </Text>
-        {tokenSum(s.agentTokens) > 0 && (
-          <Text dimColor>{`Subagents       ${formatTokens(tokenSum(s.agentTokens))} tokens more`}</Text>
-        )}
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>{`Today · ${name}`}</Text>
-          <Text>{summary(today)}</Text>
-        </Box>
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>{`All time · ${name}`}</Text>
-          <Text>{summary(all)}</Text>
-        </Box>
-        <Box marginTop={1}>
-          <Text dimColor>/token-time-report week · all-projects · sessions</Text>
-        </Box>
-      </Box>
-    )
-  })
+  on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => drawPane($, e))
 }

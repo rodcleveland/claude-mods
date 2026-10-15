@@ -129,6 +129,10 @@ test('turns are recorded to the project and show up in the report', async ($, on
   expect(text).toContain('3.4k')
   expect(text).toContain('abc12345')
 
+  const bare = await $.command.run({ command: 'token-time-report', args: '' } as never)
+  expect(String(bare.text)).toContain('Today, clover')
+  expect(String(bare.text)).not.toContain('By project')
+
   const all = await $.command.run({ command: 'token-time-report', args: 'all all-projects' } as never)
   expect(String(all.text)).toContain('By project')
   expect(String(all.text)).toContain('2026-10-15')
@@ -157,8 +161,19 @@ for (const surface of ['terminal', 'desktop'] as const) {
       requestId: 'token-time',
       props: { title: 'Tokens and time', isFocused: false, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 20 }, view: {} },
     })
-    expect(await pane.find({ type: 'Text', text: /This session · clover/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /Working now/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /All time · clover/ })).toBeDefined()
+    // Today's tab by default: the project's title, the three tiles and the chart.
+    const found = async (text: string | RegExp) => (await pane.find({ type: 'Text', text })) !== undefined
+    expect({
+      title: await found(/TODAY · CLOVER/),
+      tile: await found('ACTIVE TIME'),
+      running: await found(/working now/),
+      chart: await found(/day streak/),
+    }).toEqual({ title: true, tile: true, running: true, chart: true })
+
+    await pane.press({ key: 'tab-session' })
+    expect(await pane.find({ type: 'Text', text: 'THIS SESSION' })).toBeDefined()
+    await pane.press({ key: 'tab-week' })
+    await pane.press({ key: 'scope' })
+    expect(await pane.find({ type: 'Text', text: /LAST 7 DAYS · ALL PROJECTS/ })).toBeDefined()
   })
 }

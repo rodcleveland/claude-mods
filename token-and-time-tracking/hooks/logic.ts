@@ -1,4 +1,4 @@
-import type { AgentTurn, SessionRecord, Tokens, Totals, Turn } from '../types'
+import type { AgentTurn, DayMap, SessionRecord, Tokens, Totals, Turn } from '../types'
 
 const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
@@ -13,6 +13,7 @@ export const emptyTotals = (): Totals => ({
   activeMs: 0,
   claudeMs: 0,
   agentTokens: emptyTokens(),
+  models: {},
 })
 
 export const tokenSum = (t: Tokens) => t.input + t.output + t.cacheRead + t.cacheWrite
@@ -104,6 +105,7 @@ export function sessionTotals(rec: SessionRecord, idleMs: number, from = -Infini
     tot.output += t.output
     tot.cacheRead += t.cacheRead
     tot.cacheWrite += t.cacheWrite
+    tot.models[t.model] = (tot.models[t.model] ?? 0) + tokenSum(t)
   }
   for (const t of rec.agentTurns) {
     if (t.start < from || t.start >= to) continue
@@ -135,7 +137,14 @@ export function addTotals(a: Totals, b: Totals): Totals {
       cacheRead: a.agentTokens.cacheRead + b.agentTokens.cacheRead,
       cacheWrite: a.agentTokens.cacheWrite + b.agentTokens.cacheWrite,
     },
+    models: mergeCounts(a.models, b.models),
   }
+}
+
+function mergeCounts(a: Record<string, number>, b: Record<string, number>): Record<string, number> {
+  const out = { ...a }
+  for (const [k, n] of Object.entries(b)) out[k] = (out[k] ?? 0) + n
+  return out
 }
 
 export const sumTotals = (records: SessionRecord[], idleMs: number, from?: number, to?: number) =>
@@ -186,6 +195,52 @@ export function byDay(records: SessionRecord[], idleMs: number, from = -Infinity
       return { day, totals: a < b ? sumTotals(records, idleMs, a, b) : emptyTotals() }
     })
     .filter(d => d.totals.sessions > 0)
+}
+
+export const dayMap = (records: SessionRecord[], idleMs: number): DayMap =>
+  Object.fromEntries(byDay(records, idleMs).map(d => [d.day, d.totals]))
+
+export function mergeDayMaps(a: DayMap, b: DayMap): DayMap {
+  const out = { ...a }
+  for (const [day, t] of Object.entries(b)) out[day] = out[day] ? addTotals(out[day], t) : t
+  return out
+}
+
+export const sumDays = (map: DayMap, keep: (day: string) => boolean = () => true) =>
+  Object.entries(map).reduce((acc, [day, t]) => (keep(day) ? addTotals(acc, t) : acc), emptyTotals())
+
+/** The last `n` local days, oldest first, ending today. */
+export const lastDays = (today: string, n: number) =>
+  Array.from({ length: n }, (_, i) => dayKey(shiftDay(today, i - (n - 1))))
+
+/** Every day of today's month so far. */
+export const monthDays = (today: string) => lastDays(today, Number(today.slice(8, 10)))
+
+/** The last `n` months as YYYY-MM, oldest first, ending this one. */
+export function lastMonths(today: string, n: number): string[] {
+  const [y = 1970, m = 1] = today.split('-').map(Number)
+  return Array.from({ length: n }, (_, i) => {
+    const d = new Date(y, m - 1 - (n - 1 - i), 1)
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
+  })
+}
+
+/** Days in a row, back from today, with any active time; a quiet today doesn't break it yet. */
+export function streak(map: DayMap, today: string): number {
+  let run = 0
+  for (let i = (map[today]?.activeMs ?? 0) > 0 ? 0 : 1; ; i += 1) {
+    if ((map[dayKey(shiftDay(today, -i))]?.activeMs ?? 0) <= 0) return run
+    run += 1
+  }
+}
+
+// "claude-opus-5-5" is Opus 5.5; anything else keeps its own name.
+export function modelLabel(model: string): string {
+  if (model === '') return 'Not recorded'
+  const match = /claude-([a-z]+)-(\d+)-(\d+)/i.exec(model)
+  if (match === null) return model
+  const family = match[1] ?? ''
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${match[2]}.${match[3]}`
 }
 
 // ---- The report command's arguments ----

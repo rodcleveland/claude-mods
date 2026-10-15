@@ -37,22 +37,29 @@ export type Totals = Tokens & {
   activeMs: number
   claudeMs: number
   agentTokens: Tokens
+  /** Main-loop tokens per model id. */
+  models: Record<string, number>
 }
+
+/** Each local day's figures, keyed YYYY-MM-DD. */
+export type DayMap = Record<string, Totals>
+
+export type Tab = 'session' | 'today' | 'week' | 'month' | 'all'
+export type Scope = 'project' | 'all'
 
 /** What the pane draws from. */
 export type Live = {
   record: SessionRecord | null
   /** When the running main-loop turn started; null between turns. */
   turnStartedAt: number | null
-  /** This project's other sessions, summed when the session started (or the day changed). */
-  projectToday: Totals | null
-  projectAll: Totals | null
-  /** The local day `projectToday` counts, as YYYY-MM-DD. */
+  /** Every other session by day, this project's and all projects', read at start and every 15 minutes. */
+  history: { project: DayMap; all: DayMap } | null
+  /** The local day the history was read on, as YYYY-MM-DD. */
   day: string
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-and-time-tracking': { live: Live; now: number }
+    'token-and-time-tracking': { live: Live; now: number; tab: Tab; scope: Scope }
   }
 }

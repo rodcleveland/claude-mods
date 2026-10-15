@@ -15,9 +15,19 @@ can total them per project and per day.
 
 ## The live pane
 
-Opens when a session starts (turn that off in the plugin's config). `/token-time` reopens it. It
-shows this session, today in this project and all time in this project, plus a "Working now" clock
-while Claude is on a turn.
+Opens when a session starts (turn that off in the plugin's config); `/token-time` reopens it and
+brings it to the front. It's drawn like Rods Rack's Work Report:
+
+- **Tabs:** Session, Today, Week, Month, All. On every tab but Session, the chip on the right
+  switches between this project and all projects. Your tab and choice are kept across sessions.
+- **Tiles:** active time (out of the time on the clock), Claude working (it says "working now"
+  while a turn runs), and tokens.
+- **Where the time went:** active, Claude working and idle, each as a bar against the time on the clock.
+- **Tokens used:** a bar per model, one for subagents, then input, output and cache tokens.
+- **Chart:** active time for the last 7 days, day by day on Month, month by month on All.
+
+The running turn counts toward Claude working and active time as it runs; its tokens arrive
+when it ends. Other sessions (another terminal, another project) show up within 15 minutes.
 
 ## The report
 

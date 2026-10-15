@@ -1,6 +1,6 @@
 {
   "name": "token-and-time-tracking",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Tracks tokens and time per session, project and day: a live pane and a /token-time-report command, with the numbers kept in each project.",
   "author": {
     "name": "Rodman Cleveland"
