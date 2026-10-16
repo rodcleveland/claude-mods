@@ -1,23 +1,27 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, RenderElement, RenderInput } from 'claude-code'
 
-import type { DayMap, Scope, Tab, Totals } from '../types'
+import type { DayMap, Scope, SessionRecord, Tab, Totals } from '../types'
 import { INITIAL_LIVE, settings } from './shared'
+import { save } from './disk'
 import {
   dayKey,
   dayMap,
   formatDuration,
   formatTokens,
+  isPaused,
   lastDays,
   lastMonths,
   mergeDayMaps,
   modelLabel,
   monthDays,
+  pause,
   sessionTotals,
   streak,
   sumDays,
   tokenSum,
   touch,
+  unpause,
 } from './logic'
 import {
   BLUE,
@@ -68,6 +72,18 @@ async function flipScope($: EngineInterface) {
   await $.store.set('scope', next)
 }
 
+// Pause the timer, or resume it if it's paused, and save the session file.
+async function togglePause($: EngineInterface) {
+  const at = await $.clock.now()
+  let next = null as SessionRecord | null
+  await update($, live, l => {
+    if (l.record === null) return l
+    next = isPaused(l.record) ? unpause(l.record, at) : pause(l.record, at)
+    return { ...l, record: next }
+  })
+  if (next !== null) await save($, next)
+}
+
 /** The days a tab covers, or null for the session tab. */
 function keepFor(t: Tab, today: string): ((day: string) => boolean) | null {
   if (t === 'session') return null
@@ -104,7 +120,27 @@ export async function drawPane($: EngineInterface, e: RenderInput<'Pane'>): Prom
   const total = keep === null ? sessionTotals(rec, idleMs) : sumDays(days, keep)
   const where = scope === 'all' ? 'all projects' : rec.project.name
 
+  const paused = isPaused(l.record)
+  const lastPause = l.record.pauses?.[l.record.pauses.length - 1]
+  const pausedFor = paused && lastPause ? Math.max(0, t - lastPause.start) : null
+  // ⏸ and ▶ can draw two columns wide, so count one extra.
+  const pauseLabel = paused ? ' ▶ Resume ' : ' ⏸ Pause '
+  const chipLabel = ` ${scope === 'all' ? 'All projects' : 'This project'} ⇄ `
+  const tabsWidth = TABS.reduce((n, x) => n + TAB_LABELS[x].length + 2, 0) + (TABS.length - 1)
+  const roomFor = tabsWidth + 1 + pauseLabel.length + 1 + (tab === 'session' ? 0 : 1 + chipLabel.length)
+  const pauseInline = width >= roomFor
+  const pauseButton = (
+    <Button key="pause" plain onPress={() => void togglePause($)}>
+      {paused ? (
+        <Text bold color={INK} backgroundColor={GOLD}>{pauseLabel}</Text>
+      ) : (
+        <Text color={TEXT} backgroundColor={SLATE}>{pauseLabel}</Text>
+      )}
+    </Button>
+  )
+
   const tabs = (
+    <Box flexDirection="column" width={width}>
     <Box flexDirection="row" justifyContent="space-between" width={width}>
       <Box flexDirection="row" gap={1}>
         {TABS.map(x => (
@@ -117,18 +153,27 @@ export async function drawPane($: EngineInterface, e: RenderInput<'Pane'>): Prom
           </Button>
         ))}
       </Box>
-      {tab === 'session' ? null : (
-        <Button key="scope" plain onPress={() => void flipScope($)}>
-          <Text color={TEXT} backgroundColor={SLATE}> {scope === 'all' ? 'All projects' : 'This project'} ⇄ </Text>
-        </Button>
-      )}
+      <Box flexDirection="row" gap={1}>
+        {pauseInline ? pauseButton : null}
+        {tab === 'session' ? null : (
+          <Button key="scope" plain onPress={() => void flipScope($)}>
+            <Text color={TEXT} backgroundColor={SLATE}>{chipLabel}</Text>
+          </Button>
+        )}
+      </Box>
+    </Box>
+    {pauseInline ? null : (
+      <Box flexDirection="row" justifyContent="flex-end" width={width}>
+        {pauseButton}
+      </Box>
+    )}
     </Box>
   )
 
   const started = rec.segments[0]?.start ?? t
   const startedAt = new Date(started)
   const titles: Record<Tab, [string, string]> = {
-    session: ['THIS SESSION', `${rec.project.name} · since ${String(startedAt.getHours()).padStart(2, '0')}:${String(startedAt.getMinutes()).padStart(2, '0')}`],
+    session: [paused ? 'THIS SESSION · PAUSED' : 'THIS SESSION', `${rec.project.name} · since ${String(startedAt.getHours()).padStart(2, '0')}:${String(startedAt.getMinutes()).padStart(2, '0')}`],
     today: [`TODAY · ${where.toUpperCase()}`, longDate(today)],
     week: [`LAST 7 DAYS · ${where.toUpperCase()}`, `${shortDate(lastDays(today, 7)[0]!)} – ${shortDate(today)}`],
     month: [`THIS MONTH · ${where.toUpperCase()}`, `${monthName(today.slice(0, 7))} ${today.slice(0, 4)}`],
@@ -151,7 +196,7 @@ export async function drawPane($: EngineInterface, e: RenderInput<'Pane'>): Prom
 
   const footer = (
     <Text color={MUTED} wrap="truncate-end">
-      {`Active leaves out gaps over ${Math.round(idleMs / 60_000)} min · /token-time-report for tables`}
+      {`Active leaves out gaps over ${Math.round(idleMs / 60_000)} min and paused time · /token-time-report for tables`}
     </Text>
   )
 
@@ -166,7 +211,7 @@ export async function drawPane($: EngineInterface, e: RenderInput<'Pane'>): Prom
         <Text color={TEXT} wrap="wrap">Nothing tracked in this stretch yet.</Text>
       ) : (
         <Box flexDirection="column" width={width}>
-          {drawTiles(table, width, total, running, tab)}
+          {drawTiles(table, width, total, running, tab, pausedFor)}
           <Text> </Text>
           {drawTime(table, width, total)}
           <Text> </Text>
@@ -194,7 +239,7 @@ function heading(table: Table, label: string, width: number, right = ''): Render
 }
 
 // Three tiles with big numerals; a value too wide for them is plain bold text.
-function drawTiles(table: Table, width: number, total: Totals, running: number | null, tab: Tab): RenderElement {
+function drawTiles(table: Table, width: number, total: Totals, running: number | null, tab: Tab, pausedFor: number | null): RenderElement {
   const { Box, Text } = table
   const perRow = tilesPerRow(width)
   const tileWidth = Math.floor((width - (perRow - 1)) / perRow)
@@ -205,7 +250,8 @@ function drawTiles(table: Table, width: number, total: Totals, running: number |
     running !== null ? `working now ${formatDuration(running)}` : plural(total.turns, 'turn')
   const tiles = [
     { key: 'active', label: 'ACTIVE TIME', value: bigDuration(total.activeMs), color: GOLD, border: GOLD,
-      caption: `of ${formatDuration(total.clockMs)} on the clock` },
+      caption: pausedFor !== null ? `paused ${formatDuration(pausedFor)}` : `of ${formatDuration(total.clockMs)} on the clock`,
+      captionColor: pausedFor !== null ? GOLD : MUTED },
     { key: 'claude', label: 'CLAUDE WORKING', value: bigDuration(total.claudeMs), color: BLUE, border: SLATE,
       caption: claudeCaption, captionColor: running !== null ? GOLD : MUTED },
     { key: 'tokens', label: 'TOKENS', value: formatTokens(tokens), color: GREEN, border: SLATE,
@@ -248,7 +294,7 @@ function drawTiles(table: Table, width: number, total: Totals, running: number |
   )
 }
 
-// "Where the time went": active, Claude working and idle, each against the time on the clock.
+// "Where the time went": active, Claude working, paused and idle, each against the time on the clock.
 function drawTime(table: Table, width: number, total: Totals): RenderElement {
   const { Box, Text } = table
   const labelWidth = 18
@@ -259,7 +305,8 @@ function drawTime(table: Table, width: number, total: Totals): RenderElement {
   const rows = [
     { key: 'active', label: 'Active', ms: total.activeMs, color: GOLD },
     { key: 'claude', label: 'Claude working', ms: total.claudeMs, color: BLUE },
-    { key: 'idle', label: 'Idle', ms: Math.max(0, clock - total.activeMs), color: MUTED },
+    ...(total.pausedMs > 0 ? [{ key: 'paused', label: 'Paused', ms: total.pausedMs, color: PURPLE }] : []),
+    { key: 'idle', label: 'Idle', ms: Math.max(0, clock - total.activeMs - total.pausedMs), color: MUTED },
   ]
   return (
     <Box flexDirection="column" width={width}>

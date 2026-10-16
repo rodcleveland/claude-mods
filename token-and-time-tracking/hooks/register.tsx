@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Scope, SessionRecord, Tab } from '../types'
+import { dataDir, flushWrites, save, sessionFile, sessionsDir } from './disk'
 import { INITIAL_LIVE, settings } from './shared'
 import {
   MINUTE,
@@ -10,11 +11,14 @@ import {
   dayKey,
   dayMap,
   formatReport,
+  isPaused,
   newRecord,
   parseQuery,
+  pause,
   readUsage,
   resume,
   touch,
+  unpause,
 } from './logic'
 import { PANE, PANE_COLUMNS, PANE_TITLE, drawPane } from './pane'
 
@@ -26,10 +30,6 @@ const scope = atom({ plugin: 'token-and-time-tracking', key: 'scope' } as const,
 // The central list of every project tracked, so reports can cover them all.
 const INDEX_KEY = 'projects'
 type ProjectIndex = Record<string, { name: string; lastSeen: number }>
-
-const dataDir = (root: string) => `${root}/.claude/token-time`
-const sessionsDir = (root: string) => `${dataDir(root)}/sessions`
-const sessionFile = (root: string, id: string) => `${sessionsDir(root)}/${id}.json`
 
 function isRecord(v: unknown): v is SessionRecord {
   const r = v as SessionRecord
@@ -59,15 +59,6 @@ async function loadProject($: EngineInterface, root: string): Promise<SessionRec
 async function projectRoot($: EngineInterface): Promise<string> {
   const repo = await $.session.repo().catch(() => null)
   return repo?.root ?? (await $.session.root())
-}
-
-// Writes go one at a time, so a slow older write never lands over a newer one.
-let writing: Promise<void> = Promise.resolve()
-function save($: EngineInterface, rec: SessionRecord) {
-  writing = writing
-    .then(() => $.fs.write(sessionFile(rec.project.root, rec.sessionId), JSON.stringify(rec)))
-    .catch(() => undefined)
-  return writing
 }
 
 /** Every other session by day, for this project and for all of them: what the pane's longer tabs show. */
@@ -123,7 +114,11 @@ export const register: Register = (on, options) => {
   const openOnStart = options.openOnStart !== false
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'token-time', description: 'Open the live tokens and time pane' })
+    await $.command.register({
+      name: 'token-time',
+      description: 'Open the live tokens and time pane, or pause / resume the timer',
+      argumentHint: '[pause | resume]',
+    })
     await $.command.register({
       name: 'token-time-report',
       description: 'Report tokens and time: today, yesterday, week, month, all or a date; add all-projects or sessions',
@@ -190,16 +185,33 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'token-time' }, async $ => {
+  on('command.run', { command: 'token-time' }, async ($, e) => {
     await ensureSession($)
-    await $.ui.open({ id: PANE, title: PANE_TITLE, columns: PANE_COLUMNS, focus: true })
-    return { text: 'Tokens and time pane opened.' }
+    const arg = (e.args ?? '').trim().toLowerCase()
+    if (arg === '') {
+      await $.ui.open({ id: PANE, title: PANE_TITLE, columns: PANE_COLUMNS, focus: true })
+      return { text: 'Tokens and time pane opened.' }
+    }
+    if (arg !== 'pause' && arg !== 'resume') return { text: 'Usage: /token-time [pause | resume]' }
+
+    const pausing = arg === 'pause'
+    const t = await $.clock.now()
+    let changed: SessionRecord | null = null
+    await update($, live, l => {
+      if (l.record === null || isPaused(l.record) === pausing) return l
+      const next = pausing ? pause(l.record, t) : unpause(l.record, t)
+      changed = next
+      return { ...l, record: next }
+    })
+    if (changed === null) return { text: pausing ? 'The timer is already paused.' : "The timer isn't paused." }
+    await save($, changed)
+    return { text: pausing ? 'Timer paused.' : 'Timer resumed.' }
   })
 
   on('command.run', { command: 'token-time-report' }, async ($, e) => {
     const rec = await ensureSession($)
     await heartbeat($)
-    await writing
+    await flushWrites()
     const q = parseQuery(e.args ?? '', await $.clock.now())
     if ('error' in q) return { text: q.error }
 

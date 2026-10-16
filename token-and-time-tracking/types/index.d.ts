@@ -19,12 +19,17 @@ export type Turn = Tokens & {
 /** One subagent turn: tokens only, since its time overlaps the main turn that spawned it. */
 export type AgentTurn = Tokens & { start: number; model: string }
 
+/** A stretch the person paused the timer; end is null while it's still paused. */
+export type Pause = { start: number; end: number | null }
+
 /** What one session file in `<project>/.claude/token-time/sessions/` holds. */
 export type SessionRecord = {
   version: 1
   sessionId: string
   project: { root: string; name: string }
   segments: Segment[]
+  /** Optional so files saved before pausing existed still load. */
+  pauses?: Pause[]
   turns: Turn[]
   agentTurns: AgentTurn[]
 }
@@ -36,6 +41,8 @@ export type Totals = Tokens & {
   clockMs: number
   activeMs: number
   claudeMs: number
+  /** Time on the clock the timer was paused: left out of active and Claude working. */
+  pausedMs: number
   agentTokens: Tokens
   /** Main-loop tokens per model id. */
   models: Record<string, number>

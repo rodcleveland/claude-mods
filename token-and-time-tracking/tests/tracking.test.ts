@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { activeSpans, dayKey, dayStart, formatDuration, newRecord, parseQuery, sessionTotals, shiftDay } from '../hooks/logic'
+import { activeSpans, dayKey, dayStart, formatDuration, isPaused, newRecord, parseQuery, pause, resume, sessionTotals, shiftDay, unpause } from '../hooks/logic'
 
 const MIN = 60_000
 const ROOT = '/work/clover'
@@ -177,3 +177,133 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await pane.find({ type: 'Text', text: /LAST 7 DAYS · ALL PROJECTS/ })).toBeDefined()
   })
 }
+
+// A 60 minute session with one 20 minute turn at the start.
+function hourSession() {
+  const t0 = dayStart('2026-10-15') + 9 * 60 * MIN
+  const rec = newRecord('p1', ROOT, t0)
+  rec.segments[0]!.end = t0 + 60 * MIN
+  rec.turns.push({ start: t0, ms: 20 * MIN, model: 'm', reason: 'answer', input: 1, output: 2, cacheRead: 0, cacheWrite: 0 })
+  return { t0, rec }
+}
+
+test('a pause leaves its time out of active and Claude working, not the clock', () => {
+  const { t0, rec } = hourSession()
+  const base = sessionTotals(rec, 15 * MIN)
+  const paused = sessionTotals({ ...rec, pauses: [{ start: t0 + 5 * MIN, end: t0 + 15 * MIN }] }, 15 * MIN)
+  expect(paused.clockMs).toBe(base.clockMs)
+  expect(paused.activeMs).toBe(base.activeMs - 10 * MIN)
+  expect(paused.claudeMs).toBe(base.claudeMs - 10 * MIN)
+  expect(paused.pausedMs).toBe(10 * MIN)
+  expect(paused.output).toBe(base.output)
+  expect(base.pausedMs).toBe(0)
+})
+
+test('overlapping pauses and pauses outside the session do not double count', () => {
+  const { t0, rec } = hourSession()
+  const tot = sessionTotals(
+    {
+      ...rec,
+      pauses: [
+        { start: t0 + 5 * MIN, end: t0 + 15 * MIN },
+        { start: t0 + 10 * MIN, end: t0 + 20 * MIN },
+        { start: t0 + 90 * MIN, end: t0 + 100 * MIN },
+      ],
+    },
+    15 * MIN,
+  )
+  expect(tot.pausedMs).toBe(15 * MIN)
+})
+
+test('an open pause counts to the end of the segment', () => {
+  const { t0, rec } = hourSession()
+  const open = { ...rec, pauses: [{ start: t0 + 50 * MIN, end: null }] }
+  expect(isPaused(open)).toBe(true)
+  expect(sessionTotals(open, 15 * MIN).pausedMs).toBe(10 * MIN)
+})
+
+test('pause and unpause, including their no-op cases', () => {
+  const { t0, rec } = hourSession()
+  expect(isPaused(rec)).toBe(false)
+  expect(unpause(rec, t0 + 5 * MIN)).toBe(rec) // not paused: nothing changes
+  const p = pause(rec, t0 + 10 * MIN)
+  expect(isPaused(p)).toBe(true)
+  expect(p.pauses).toEqual([{ start: t0 + 10 * MIN, end: null }])
+  expect(pause(p, t0 + 20 * MIN)).toBe(p) // already paused
+  const u = unpause(p, t0 + 30 * MIN)
+  expect(isPaused(u)).toBe(false)
+  expect(u.pauses).toEqual([{ start: t0 + 10 * MIN, end: t0 + 30 * MIN }])
+  // A clock that went backwards closes the pause at its start, never before it.
+  expect(unpause(p, t0 + 5 * MIN).pauses).toEqual([{ start: t0 + 10 * MIN, end: t0 + 10 * MIN }])
+})
+
+test('resuming a session closes an open pause at the old segment end', () => {
+  const { t0, rec } = hourSession()
+  const open = { ...rec, pauses: [{ start: t0 + 50 * MIN, end: null }] }
+  const again = resume(open, t0 + 5 * 60 * MIN)
+  expect(isPaused(again)).toBe(false)
+  expect(again.pauses).toEqual([{ start: t0 + 50 * MIN, end: t0 + 60 * MIN }])
+  expect(again.segments.length).toBe(2)
+})
+
+test('/token-time pause and resume are saved and answered', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  const files = fakeDisk(on)
+  let clock = dayStart('2026-10-15') + 10 * 60 * MIN
+  on('clock.now', () => ({ value: clock }) as never)
+  on('clock.every', () => ({ value: { cancel() {} } }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('session.id', () => ({ value: 'pause-session' }) as never)
+  on('session.repo', () => ({ value: { root: ROOT, remote: null, internal: false, name: null } }) as never)
+  on('session.root', () => ({ value: ROOT }) as never)
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  const run = async (args: string) => String((await $.command.run({ command: 'token-time', args } as never)).text)
+  const file = `${ROOT}/.claude/token-time/sessions/pause-session.json`
+
+  expect(await run('resume')).toBe("The timer isn't paused.")
+  expect(await run('pause')).toBe('Timer paused.')
+  expect(await run('pause')).toBe('The timer is already paused.')
+  clock += 10 * MIN
+  expect(await run('resume')).toBe('Timer resumed.')
+  expect(await run('bogus')).toBe('Usage: /token-time [pause | resume]')
+
+  const saved = JSON.parse(files.get(file) ?? '{}')
+  expect(saved.pauses.length).toBe(1)
+  expect(saved.pauses[0].end - saved.pauses[0].start).toBe(10 * MIN)
+
+  // The report gets a Paused column.
+  clock += 5 * MIN
+  const report = String((await $.command.run({ command: 'token-time-report', args: 'today' } as never)).text)
+  expect(report).toContain('Paused')
+  expect(report).toContain('Paused: time you paused the timer, left out of Active and Claude working.')
+})
+
+test('the pane pauses and resumes from its button', async ($, on) => {
+  mock.store(on)
+  engine(on)
+  fakeDisk(on)
+  const clock = dayStart('2026-10-15') + 10 * 60 * MIN
+  on('clock.now', () => ({ value: clock }) as never)
+  on('clock.every', () => ({ value: { cancel() {} } }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('session.id', () => ({ value: 'pane-pause' }) as never)
+  on('session.repo', () => ({ value: null }) as never)
+  on('session.root', () => ({ value: ROOT }) as never)
+
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+  const pane = await $.ui.mount({
+    plugin: 'token-and-time-tracking',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'token-time',
+    props: { title: 'Tokens and time', isFocused: false, bodyColumns: 80, placement: 'inline', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  })
+  const found = async (text: string | RegExp) => (await pane.find({ type: 'Text', text })) !== undefined
+  const seen = { before: await found(/⏸ Pause/) }
+  await pane.press({ key: 'pause' })
+  const during = { resume: await found(/▶ Resume/), caption: await found(/paused/) }
+  await pane.press({ key: 'pause' })
+  expect({ ...seen, ...during, after: await found(/⏸ Pause/) }).toEqual({ before: true, resume: true, caption: true, after: true })
+})

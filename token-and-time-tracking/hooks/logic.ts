@@ -1,4 +1,4 @@
-import type { AgentTurn, DayMap, SessionRecord, Tokens, Totals, Turn } from '../types'
+import type { AgentTurn, DayMap, Pause, SessionRecord, Tokens, Totals, Turn } from '../types'
 
 const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
@@ -12,6 +12,7 @@ export const emptyTotals = (): Totals => ({
   clockMs: 0,
   activeMs: 0,
   claudeMs: 0,
+  pausedMs: 0,
   agentTokens: emptyTokens(),
   models: {},
 })
@@ -43,11 +44,42 @@ export function newRecord(sessionId: string, root: string, now: number): Session
   }
 }
 
-/** A resumed session keeps its file and opens a new segment, so the time it was closed isn't counted. */
-export const resume = (rec: SessionRecord, now: number): SessionRecord => ({
-  ...rec,
-  segments: [...rec.segments, { start: now, end: now }],
-})
+/**
+ * A resumed session keeps its file and opens a new segment, so the time it was closed isn't counted.
+ * A pause left open when it closed ends where the old segment did, so the resumed one starts unpaused.
+ */
+export function resume(rec: SessionRecord, now: number): SessionRecord {
+  const oldEnd = rec.segments[rec.segments.length - 1]?.end
+  const pauses = (rec.pauses ?? []).map((p): Pause =>
+    p.end === null ? { start: p.start, end: Math.max(p.start, oldEnd ?? now) } : p,
+  )
+  return {
+    ...rec,
+    ...(rec.pauses === undefined ? {} : { pauses }),
+    segments: [...rec.segments, { start: now, end: now }],
+  }
+}
+
+export const isPaused = (rec: SessionRecord): boolean => rec.pauses?.[rec.pauses.length - 1]?.end === null
+
+/** Starts a pause; does nothing if one is already open. */
+export const pause = (rec: SessionRecord, now: number): SessionRecord =>
+  isPaused(rec) ? rec : touch({ ...rec, pauses: [...(rec.pauses ?? []), { start: now, end: null }] }, now)
+
+/** Ends the open pause; does nothing if the timer isn't paused. */
+export function unpause(rec: SessionRecord, now: number): SessionRecord {
+  const pauses = (rec.pauses ?? []).slice()
+  const last = pauses[pauses.length - 1]
+  if (last === undefined || last.end !== null) return rec
+  pauses[pauses.length - 1] = { start: last.start, end: Math.max(last.start, now) }
+  return touch({ ...rec, pauses }, now)
+}
+
+/** The paused stretches that have ended; an open pause runs to the end of the last segment. */
+export function pauseSpans(rec: SessionRecord): Array<[number, number]> {
+  const limit = rec.segments[rec.segments.length - 1]?.end ?? -Infinity
+  return (rec.pauses ?? []).map((p): Span => [p.start, Math.max(p.start, p.end ?? limit)])
+}
 
 /** Moves the open segment's end to now. */
 export function touch(rec: SessionRecord, now: number): SessionRecord {
@@ -65,6 +97,24 @@ export const addAgentTurn = (rec: SessionRecord, turn: AgentTurn): SessionRecord
   touch({ ...rec, agentTurns: [...rec.agentTurns, turn] }, turn.start)
 
 type Span = [number, number]
+
+/** `spans` with every `cuts` stretch taken out; overlapping cuts only remove their time once. */
+function subtract(spans: Span[], cuts: Span[]): Span[] {
+  const sorted = cuts.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])
+  const out: Span[] = []
+  for (const [a, b] of spans) {
+    let from = a
+    for (const [c, d] of sorted) {
+      if (d <= from) continue
+      if (c >= b) break
+      if (c > from) out.push([from, c])
+      from = Math.max(from, d)
+      if (from >= b) break
+    }
+    if (from < b) out.push([from, b])
+  }
+  return out
+}
 
 const clippedLength = (spans: Span[], from: number, to: number) =>
   spans.reduce((sum, [a, b]) => sum + Math.max(0, Math.min(b, to) - Math.max(a, from)), 0)
@@ -96,8 +146,10 @@ export function sessionTotals(rec: SessionRecord, idleMs: number, from = -Infini
   const tot = emptyTotals()
   const segs: Span[] = rec.segments.map(s => [s.start, s.end])
   tot.clockMs = clippedLength(segs, from, to)
-  tot.activeMs = clippedLength(activeSpans(rec, idleMs), from, to)
-  tot.claudeMs = clippedLength(rec.turns.map(t => [t.start, t.start + t.ms] as Span), from, to)
+  const cuts = pauseSpans(rec)
+  tot.activeMs = clippedLength(subtract(activeSpans(rec, idleMs), cuts), from, to)
+  tot.claudeMs = clippedLength(subtract(rec.turns.map(t => [t.start, t.start + t.ms] as Span), cuts), from, to)
+  tot.pausedMs = tot.clockMs - clippedLength(subtract(segs, cuts), from, to)
   for (const t of rec.turns) {
     if (t.start < from || t.start >= to) continue
     tot.turns += 1
@@ -127,6 +179,7 @@ export function addTotals(a: Totals, b: Totals): Totals {
     clockMs: a.clockMs + b.clockMs,
     activeMs: a.activeMs + b.activeMs,
     claudeMs: a.claudeMs + b.claudeMs,
+    pausedMs: a.pausedMs + b.pausedMs,
     input: a.input + b.input,
     output: a.output + b.output,
     cacheRead: a.cacheRead + b.cacheRead,
@@ -303,11 +356,11 @@ const tokenCells = (t: Tokens) =>
 
 const row = (label: string, t: Totals) =>
   `| ${label} | ${t.sessions} | ${t.turns} | ${formatDuration(t.clockMs)} | ${formatDuration(t.activeMs)} | ` +
-  `${formatDuration(t.claudeMs)} | ${tokenCells(t)} | ${formatTokens(tokenSum(t.agentTokens))} |`
+  `${formatDuration(t.claudeMs)} | ${formatDuration(t.pausedMs)} | ${tokenCells(t)} | ${formatTokens(tokenSum(t.agentTokens))} |`
 
 const HEADER =
-  '| | Sessions | Turns | On the clock | Active | Claude working | Input | Output | Cache read | Cache write | Total tokens | Subagent tokens |\n' +
-  '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|'
+  '| | Sessions | Turns | On the clock | Active | Claude working | Paused | Input | Output | Cache read | Cache write | Total tokens | Subagent tokens |\n' +
+  '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|'
 
 export function formatReport(
   q: Query,
@@ -352,7 +405,8 @@ export function formatReport(
 
   lines.push(
     `_On the clock: how long sessions were open. Active: turns plus gaps under ${Math.round(idleMs / MINUTE)} minutes. ` +
-      'Claude working: time Claude spent on turns. Subagent tokens are extra to the token columns._',
+      'Claude working: time Claude spent on turns. ' +
+      'Paused: time you paused the timer, left out of Active and Claude working. Subagent tokens are extra to the token columns._',
   )
   return lines.join('\n')
 }

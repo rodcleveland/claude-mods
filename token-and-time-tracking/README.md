@@ -10,6 +10,8 @@ can total them per project and per day.
 - **Active**: Claude's turns plus the gaps between them shorter than the idle limit (15 minutes by
   default). A session left open overnight doesn't add hours here, so this is the figure to bill from.
 - **Claude working**: how long Claude spent on each turn, summed.
+- **Paused**: time you paused the timer. It's left out of Active and Claude working, but still
+  counts as time on the clock. Tokens are counted while paused.
 - **Tokens**: input, output, cache read and cache write, per turn. Subagent tokens are counted
   separately, and their time isn't, because it overlaps the turn that started them.
 
@@ -22,12 +24,24 @@ brings it to the front. It's drawn like Rods Rack's Work Report:
   switches between this project and all projects. Your tab and choice are kept across sessions.
 - **Tiles:** active time (out of the time on the clock), Claude working (it says "working now"
   while a turn runs), and tokens.
-- **Where the time went:** active, Claude working and idle, each as a bar against the time on the clock.
+- **Pause button:** on the right of the tabs row. **⏸ Pause** stops the timer for working time;
+  **▶ Resume** starts it again. While paused, the active time tile shows how long, and the Session
+  title says PAUSED.
+- **Where the time went:** active, Claude working, paused (only when there is some) and idle, each
+  as a bar against the time on the clock.
 - **Tokens used:** a bar per model, one for subagents, then input, output and cache tokens.
 - **Chart:** active time for the last 7 days, day by day on Month, month by month on All.
 
 The running turn counts toward Claude working and active time as it runs; its tokens arrive
 when it ends. Other sessions (another terminal, another project) show up within 15 minutes.
+
+## Pausing
+
+`/token-time pause` and `/token-time resume` do the same as the button. Pausing twice, or
+resuming when not paused, just tells you so.
+
+If a session is closed while paused, the pause ends where the session ended. Resumed later, it
+starts unpaused.
 
 ## The report
 
@@ -37,6 +51,8 @@ when it ends. Other sessions (another terminal, another project) show up within 
   `2026-10-15`, or a range `2026-10-01..2026-10-15`
 - `all-projects`: every project tracked, with a by-project table
 - `sessions`: a row for each session
+
+The tables have a **Paused** column right after Claude working.
 
 A period longer than a day gets a by-day table. A session that runs past midnight has its time
 split between the two days; a turn's tokens count on the day it started.
