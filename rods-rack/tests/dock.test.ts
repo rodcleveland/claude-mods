@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { applyHelperProgress, IDLE_MISSION, addQueued, claimSlot, parseSize, summary } from '../hooks/dock-logic'
+import { applyHelperProgress, IDLE_MISSION, addQueued, claimSlot, launchedAgent, parseSize, summary } from '../hooks/dock-logic'
 
 const AGENT_DONE = { result: { agentId: 'a1', content: [], totalToolUseCount: 0, totalDurationMs: 0 } }
 const PANE = {
@@ -14,7 +14,7 @@ const PANE = {
 
 // The test stands for the engine beneath the plugin: a clock, a store and an environment in memory,
 // panes it keeps open, a status line it records, and Agent calls it answers when `release` says.
-function engine(on: On, store: Record<string, unknown> = {}, env: Record<string, string> = {}) {
+function engine(on: On, store: Record<string, unknown> = {}, env: Record<string, string> = {}, answer: unknown = AGENT_DONE) {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on, store)
   mock.env(on, env)
@@ -55,7 +55,7 @@ function engine(on: On, store: Record<string, unknown> = {}, env: Record<string,
   })
   on('tool.call', { tool: 'Agent' }, async () => {
     await gate
-    return AGENT_DONE as never
+    return answer as never
   })
   const hold = () => {
     gate = new Promise(resolve => (open = resolve))
@@ -209,6 +209,38 @@ test('a helper report of 60 moves its card to 60%', async () => {
   // Later reports find the card by its agent, whatever task they name.
   mission = applyHelperProgress(mission, { agentId: 'a1', description: null, task: 'something else', percent: 90 })
   expect(mission.cards[0]!.percent).toBe(90)
+})
+
+test('a helper that reports 100 shows 99% until its call returns', async () => {
+  let mission = addQueued(IDLE_MISSION, 'tu1', 'Price check: Panera', 0)
+  mission = claimSlot(mission, 'tu1', 10, 0).mission
+  mission = applyHelperProgress(mission, { agentId: 'a1', description: 'Price check: Panera', task: 'Price check: Panera', percent: 100 })
+  expect(mission.cards[0]).toMatchObject({ percent: 99, status: 'working' })
+})
+
+test('a background helper stays working until its own turn ends', async ($, on) => {
+  // This engine launches every Agent call in the background, as the Agent tool does by default.
+  const launched = { result: { status: 'async_launched', agentId: 'a1', description: 'Price check: Panera', prompt: '', outputFile: '' } }
+  const { clock } = engine(on, {}, {}, launched)
+  await start($)
+  await $.command.run({ command: 'dock', args: '3' } as never)
+  await $.prompt.submit(typed('Price check three bakeries'))
+  await $.tool.call(agent('Price check: Panera'))
+  // The request's turn ends with the helper still out: the dock stays live, the card working.
+  await $.turn.complete(ANSWERED)
+  await clock.settle()
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const live = await drawn(pane)
+  expect(live).toContain('Working')
+  expect(live).not.toContain('100%')
+  expect(live).toContain('L I V E')
+
+  await $.turn.complete({ ...ANSWERED, turnId: 'h1', agentId: 'a1' })
+  await clock.settle()
+  await pane.redraw(PANE.props)
+  expect(await drawn(pane)).toContain('100%')
+  expect(launchedAgent({ agentId: 'a1', content: [] })).toBeNull()
 })
 
 test('when all are done the dock shows "3 agents finished <job> in …"', async ($, on) => {

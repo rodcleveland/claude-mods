@@ -9,6 +9,7 @@ import {
   atATime,
   badge,
   badgeColor,
+  bindAgent,
   capDenial,
   CARD_LIMIT,
   cardMeter,
@@ -18,6 +19,7 @@ import {
   composeStatus,
   CORAL,
   counts,
+  finishAgent,
   finishCard,
   finishMission,
   GOLD,
@@ -31,6 +33,7 @@ import {
   isPlanFinished,
   isSettled,
   jobName,
+  launchedAgent,
   LIVE_GREEN,
   missionPercent,
   mix,
@@ -603,6 +606,9 @@ export function registerDock(on: On) {
         const endedAt = await $.clock.now()
         if (ran.deny !== undefined) {
           await changeMission($, m => ({ ...removeCard(m, id), admitted: Math.max(0, m.admitted - 1) }))
+        } else if (launchedAgent(ran.result) !== null) {
+          // Launched in the background: the card finishes when the helper's own turn does.
+          await changeMission($, m => bindAgent(m, id, launchedAgent(ran.result)!))
         } else {
           await changeMission($, m => finishCard(m, id, ran.isError !== true, endedAt))
         }
@@ -616,7 +622,17 @@ export function registerDock(on: On) {
   // The request's turn ended: one nudge if it used fewer helpers than the Team Size and work is
   // left, else the summary. A Clean View plan with every step done has none left to split.
   on('turn.complete', { reason: /^/ }, async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined) {
+      // A helper's own turn ended: a background helper's card finishes here.
+      try {
+        const agentId = e.agentId
+        const now = await $.clock.now()
+        await changeMission($, m => finishAgent(m, agentId, e.reason === 'answer', now))
+      } catch {
+        // The card keeps its last state.
+      }
+      return next(e)
+    }
     try {
       const mission = await read($, dockMission)
       const now = await $.clock.now()

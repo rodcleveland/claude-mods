@@ -17,13 +17,6 @@ import { registerTv, TV_PANE } from './tv'
 import { isPlaying, OFF_STATE } from './tv-logic'
 import { badge, composeStatus, HELPER_OPTIONS, IDLE_MISSION, isBigTeam, SIZES } from './dock-logic'
 
-// Edit this to change what "Create photo or video" asks for.
-export const CREATE_PROMPT =
-  'I want to create a photo or a video. First ask me what I want to make: ' +
-  'the subject, the style, the format (image or video) and any size or length. ' +
-  'Then make it with whichever image or video generation MCP server is connected. ' +
-  'If none is connected, tell me so instead of guessing.'
-
 const UPGRADE_SYSTEM =
   'Rewrite the user prompt so it is clearer and more specific for a coding assistant. ' +
   'Keep the user\'s intent and every constraint, file name, value and instruction they stated. ' +
@@ -181,10 +174,6 @@ const QUESTION_PANE_SWITCH = { plugin: 'question-pane', key: 'enabled' } as cons
 
 async function setQuestionPane($: Dollar, isOn: boolean) {
   await $.command.run({ command: 'question-pane', args: isOn ? 'on' : 'off' })
-}
-
-async function closePanel($: Dollar) {
-  await update($, panelOpen, () => false)
 }
 
 async function togglePanel($: Dollar) {
@@ -348,6 +337,14 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
         </Box>
       )}
       <Box flexDirection="row">
+        <Text color={p.autoModel ? 'green' : undefined}>{p.autoModel ? '● ' : '○ '}</Text>
+        <Box width={16}><Text color="white">Auto Model</Text></Box>
+        <Box flexGrow={1}><Text dimColor>model per prompt</Text></Box>
+        <Button key="toggle-auto-model" plain onPress={() => void setAutoModel($, !p.autoModel)}>
+          {p.autoModel ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
+        </Button>
+      </Box>
+      <Box flexDirection="row">
         <Text color={p.helper !== 'same' ? 'green' : undefined}>{p.helper !== 'same' ? '● ' : '○ '}</Text>
         <Box width={16}><Text color="white">Helper agents</Text></Box>
         <Box flexGrow={1}><Text dimColor>model they use</Text></Box>
@@ -376,14 +373,6 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
           {isCustomTeam ? <Text color={INK} backgroundColor={ORANGE}> {teamSize} </Text> : <Text dimColor> Custom </Text>}
         </Button>
       </Box>
-      <Box flexDirection="row">
-        <Text color={p.autoModel ? 'green' : undefined}>{p.autoModel ? '● ' : '○ '}</Text>
-        <Box width={16}><Text color="white">Auto Model</Text></Box>
-        <Box flexGrow={1}><Text dimColor>model per prompt</Text></Box>
-        <Button key="toggle-auto-model" plain onPress={() => void setAutoModel($, !p.autoModel)}>
-          {p.autoModel ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
-        </Button>
-      </Box>
       {upgrade !== null && (
         <Button key="view-original" plain dimColor onPress={() => $.ui.log(`Original prompt:\n${upgrade.original}`)}>
           Last prompt was upgraded. View the original
@@ -392,16 +381,6 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
       <Text> </Text>
       {heading('LAUNCH')}
       <Box flexDirection="row" flexWrap="wrap" columnGap={4}>
-        <Button
-          key="launch-create"
-          plain
-          onPress={async () => {
-            await closePanel($)
-            await $.prompt.submit({ text: CREATE_PROMPT })
-          }}
-        >
-          ✦ Create photo or video
-        </Button>
         <Button key="launch-dock" plain onPress={() => void openDock($)}>
           ◆ Agent Dock
         </Button>

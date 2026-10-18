@@ -266,6 +266,24 @@ export function finishCard(mission: DockMission, id: string, isOk: boolean, now:
   }
 }
 
+// The agent an Agent call launched in the background, from its result; null for one that ran to the end.
+export function launchedAgent(result: unknown): string | null {
+  const r = result as { status?: unknown; agentId?: unknown } | null | undefined
+  return r?.status === 'async_launched' && typeof r.agentId === 'string' ? r.agentId : null
+}
+
+// A background helper's Agent call answered at launch: its card stays working, bound to the agent,
+// until that agent's own turn ends.
+export function bindAgent(mission: DockMission, id: string, agentId: string): DockMission {
+  return { ...mission, cards: mission.cards.map(c => (c.id === id && c.status === 'working' ? { ...c, agentId } : c)) }
+}
+
+// A helper's own turn ended: its working card is done, or stuck if it did not answer.
+export function finishAgent(mission: DockMission, agentId: string, isOk: boolean, now: number): DockMission {
+  const card = mission.cards.find(c => c.agentId === agentId && c.status === 'working')
+  return card === undefined ? mission : finishCard(mission, card.id, isOk, now)
+}
+
 export function removeCard(mission: DockMission, id: string): DockMission {
   return { ...mission, cards: mission.cards.filter(c => c.id !== id) }
 }
@@ -287,14 +305,17 @@ export function applyHelperProgress(
   return {
     ...mission,
     cards: mission.cards.map(c =>
-      c.id === target.id ? { ...c, agentId: report.agentId, percent: c.status === 'done' ? 100 : percent, hasReported: true } : c,
+      // A helper that reports 100 is still writing its answer: only a finished card shows 100%.
+      c.id === target.id ? { ...c, agentId: report.agentId, percent: c.status === 'done' ? 100 : Math.min(99, percent), hasReported: true } : c,
     ),
   }
 }
 
 // The request's turn ended: a mission with helpers shows its summary; one without stands by.
+// Background helpers still working keep it live, until a later turn ends with them done.
 export function finishMission(mission: DockMission, isAborted: boolean, now: number): DockMission {
   if (mission.cards.length === 0) return { ...mission, phase: 'idle' }
+  if (!isAborted && mission.cards.some(c => c.status === 'working')) return mission
   const cards = isAborted
     ? mission.cards.map(c => (c.status === 'queued' || c.status === 'working' ? { ...c, status: 'stuck' as const, finishedAt: now } : c))
     : mission.cards
