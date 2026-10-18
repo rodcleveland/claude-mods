@@ -12,6 +12,7 @@ import type {
 import { EFFORT_LABELS, familyFor, guessLevel, isShortReply, modelStatusText, parseLevel, SORT_SYSTEM } from './auto-model'
 import { registerCleanView } from './clean-view'
 import { DOCK_PANE, registerDock } from './dock'
+import { registerMdViewer } from './md-viewer'
 import { REPORT_PANE, registerReport } from './report'
 import { registerTv, TV_PANE } from './tv'
 import { isPlaying, OFF_STATE } from './tv-logic'
@@ -59,6 +60,7 @@ const DEFAULT_PREFS: RackPrefs = {
   autoModel: false,
   autoPrevious: null,
   autoUnavailable: [],
+  mdViewer: true,
 }
 
 const prefs = atom({ plugin: 'rods-rack', key: 'prefs' } as const, DEFAULT_PREFS)
@@ -344,6 +346,7 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
           {p.autoModel ? <Text color={INK} backgroundColor="green"> ● On  </Text> : <Text dimColor>[○ Off]</Text>}
         </Button>
       </Box>
+      {toggleRow('toggle-md-viewer', 'Markdown viewer', 'ask to open .md files', p.mdViewer, x => ({ ...x, mdViewer: !x.mdViewer }))}
       <Box flexDirection="row">
         <Text color={p.helper !== 'same' ? 'green' : undefined}>{p.helper !== 'same' ? '● ' : '○ '}</Text>
         <Box width={16}><Text color="white">Helper agents</Text></Box>
@@ -414,6 +417,7 @@ export const register: Register = on => {
   registerReport(on)
   registerTv(on)
   registerCleanView(on)
+  registerMdViewer(on)
 
   on('session.start', async ($, e, next) => {
     await hydrate($)

@@ -17,6 +17,8 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
   The row only shows when that mod is installed; the mod keeps the setting itself.
 - **Auto Model**: picks the model for each new prompt you type (see below). Also the gold
   `Auto Model: On` / slate `Auto Model: Off` chip in the footer, and `/automodel`.
+- **Markdown viewer**: when Claude writes a Markdown file (`.md` or `.markdown`), asks whether to
+  open it, and on yes opens it in a Markdown viewer pane (see below). On by default.
 - **Helper agents**: the model subagents use (Fast & Cheap → Haiku, Balanced → Sonnet, Same as main),
   when Claude does not name one on the Agent call.
 - **Team size**: how many helper agents each request is split across (1, 3, 5, 10, 20, 50, 100 or
@@ -26,6 +28,20 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
   `/mnt/c`; a toast says so if neither runs).
 
 Your choices are saved and come back in new sessions and after `/clear`, `/resume` and `/branch`.
+
+## Markdown viewer
+
+- Every Markdown file Claude writes with the Write tool in the main conversation is noted. When the
+  turn ends you are asked once, in the usual question dialog: one file is a yes or no, several are
+  offered by name (the first three). The question waits for the turn's end so Claude never stops
+  mid-job to wait on it.
+- Yes opens the file in a pane drawn with Claude Code's own Markdown renderer (headings, lists,
+  tables, code). Scroll with the wheel or arrow keys; **↻ Reload** reads the file again, and when
+  several files were written together each has a button to switch to it.
+- Not asked about: files a helper agent writes, a turn you interrupted, and Claude's own bookkeeping
+  under `~/.claude/projects` (memory notes and saved tool output).
+- `/mdview <path>` opens any Markdown file in the viewer; `/mdview` alone reopens the last one.
+- Files over about 90,000 characters are cut, with a note at the end.
 
 ## Clean View
 

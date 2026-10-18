@@ -74,6 +74,7 @@ const DEFAULT_PREFS: RackPrefs = {
   autoModel: false,
   autoPrevious: null,
   autoUnavailable: [],
+  mdViewer: true,
 }
 
 const dockSize = atom({ plugin: 'rods-rack', key: 'dockSize' } as const, 1)

@@ -13,6 +13,16 @@ export type RackPrefs = {
   autoModel: boolean
   autoPrevious: RackFamily | null
   autoUnavailable: RackFamily[]
+  // Markdown viewer: ask to open each .md file Claude writes when its turn ends.
+  mdViewer: boolean
+}
+
+// The Markdown viewer pane: the files offered together, the one showing, and its text or error.
+export type MdView = {
+  files: string[]
+  index: number
+  text: string | null
+  error: string | null
 }
 
 export type RackSeen = { model: string | null; effort: string | null }
@@ -176,6 +186,8 @@ declare module 'claude-code' {
       reportPending: string[] | null
       tv: TvState
       tvSettings: TvSettings
+      mdPending: string[]
+      mdView: MdView
     }
   }
 }

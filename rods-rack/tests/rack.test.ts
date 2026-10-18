@@ -58,6 +58,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await panel.press({ key: 'toggle-clean-view' })
     expect(writes.at(-1)).toEqual({ key: 'cleanView', value: false })
     expect((await panel.find({ key: 'toggle-clean-view' }))?.text).toContain('Off')
+
+    // The Markdown viewer starts on, in the row under Auto Model.
+    const drawn = JSON.stringify(await panel.drawn())
+    expect(drawn.indexOf('Markdown viewer')).toBeGreaterThan(drawn.indexOf('Auto Model'))
+    expect(drawn.indexOf('Markdown viewer')).toBeLessThan(drawn.indexOf('Helper agents'))
+    expect((await panel.find({ key: 'toggle-md-viewer' }))?.text).toContain('On')
+    await panel.press({ key: 'toggle-md-viewer' })
+    expect(writes.at(-1)).toMatchObject({ key: 'prefs', value: { mdViewer: false } })
   })
 }
 
