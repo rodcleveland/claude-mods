@@ -22,17 +22,21 @@ shown. Helper agents' writes count as well.
 
 ## Where progress comes from
 
-From Claude's own task and to-do lists. While a plan is loaded, Claude is asked to start each
-task's subject with the milestone id from the plan ("U3: Calendar view") and to mark tasks in
-progress and completed as it goes; the pane follows those marks. Ticked checkboxes in the plan
-file count too. The plan file itself is never edited: progress is kept beside it.
+Mainly from the mod's own tool, `mark_milestone`, which every session has: Claude calls it with
+milestone ids from the plan ("U3", "task-2", a range like "U3–U5") and "started" or "done" as the
+work moves, and the pane follows. Its answer says what was marked, and lists the plan's real ids
+when Claude names one the plan doesn't have.
 
-Known limits in 0.1.0:
+Claude learns this two ways:
 
-- Where a session has neither TaskCreate nor TodoWrite, only ticked checkboxes move the marks.
-- The note asking Claude to name tasks by milestone id is part of the system prompt, so it reaches
-  Claude only in a conversation that starts with a plan already loaded, not one where the plan
-  appears partway through (or a resumed one).
+- A conversation that starts with a plan already loaded has it in its system prompt.
+- When a plan appears partway through a conversation, Claude gets a one-time note the first time
+  it writes, edits or reads that plan, with the plan's title, path and milestone ids. Re-reading
+  the same plan doesn't repeat it.
+
+Where a session has Claude's task or to-do tools (TaskCreate, TodoWrite), a task whose subject
+starts with a milestone id ("U3: Calendar view") moves that milestone too. Ticked checkboxes in the
+plan file count as well. The plan file itself is never edited: progress is kept beside it.
 
 ## Colours
 

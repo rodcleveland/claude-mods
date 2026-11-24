@@ -1,7 +1,15 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Milestone, MilestoneStatus, Plan, PlanSection } from '../types'
-import { applyStatus, flashesFor, fromTaskStatus, rowsFor, unitIdsIn, withProgress } from '../hooks/progress-logic'
+import { applyStatus, flashesFor, fromTaskStatus, resolveIds, rowsFor, unitIdsIn, withProgress } from '../hooks/progress-logic'
+
+test('resolveIds matches plan ids in any case, by range or heading text, and names the rest', () => {
+  const known = ['U1', 'U2', 'U3', 'U12b', 'task-2']
+  expect(resolveIds(['u1', 'U12B', 'TASK-2'], known)).toEqual({ ids: ['U1', 'U12b', 'task-2'], unknown: [] })
+  expect(resolveIds(['U2–U3', 'Task 2: Wire the API'], known)).toEqual({ ids: ['U2', 'U3', 'task-2'], unknown: [] })
+  expect(resolveIds(['U1', 'u1', ' U1 '], known)).toEqual({ ids: ['U1'], unknown: [] })
+  expect(resolveIds(['U9', 'calendar', ''], known)).toEqual({ ids: [], unknown: ['U9', 'calendar'] })
+})
 
 // Plans built by hand, so these tests don't lean on the parser.
 const ms = (id: string, status: MilestoneStatus = 'todo', label = `${id} work`): Milestone => ({ id, label, status })

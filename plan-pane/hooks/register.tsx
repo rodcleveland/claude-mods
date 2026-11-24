@@ -3,7 +3,16 @@ import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { FlashTone, MilestoneStatus, PaneRow, Plan, PlanProgress } from '../types'
 import { isPlanDoc, isPlanPath, parsePlan } from './plan-logic'
-import { applyStatus, flashesFor, fromTaskStatus, rowsFor, unitIdsIn, withProgress } from './progress-logic'
+import {
+  MARK_STATUS,
+  applyStatus,
+  flashesFor,
+  fromTaskStatus,
+  resolveIds,
+  rowsFor,
+  unitIdsIn,
+  withProgress,
+} from './progress-logic'
 import { FLASH_MS, tonesFor } from './tones'
 
 type Dollar = EngineInterface
@@ -17,15 +26,34 @@ const progressKey = (path: string) => `progress:${path}`
 
 const NO_PLAN = 'No plan yet. Write or open a plan document in a plans folder and it shows here.'
 const TOO_NARROW = 'The window is too narrow to show the plan. Widen it and type /planpane again.'
-const GUIDANCE =
-  'A plan document is loaded in the Plan pane. When you track work from it with TaskCreate or TodoWrite, ' +
-  'start each task\'s subject with the milestone id from the plan (for example "U3: Calendar view"), and mark ' +
-  'tasks in_progress and completed as the work moves, so the pane ticks the milestones off.'
+const MARK_NAME = 'mark_milestone'
+const MARK_TOOL = `mcp__plan-pane__${MARK_NAME}`
+const MAX_LISTED = 40
+
+// How Claude moves the marks: the mod's own tool first, which every session has; task and to-do
+// names as well where a session has those tools.
+const HOW_TO_MARK =
+  `As you work through its milestones, call ${MARK_TOOL} with the milestone ids from the plan (for example ` +
+  '["U3"]) and status "started" when work on one begins and "done" when it is finished, so the pane ticks ' +
+  "them off. If you also track the work with TaskCreate or TodoWrite, start each task's subject with the " +
+  'milestone id (for example "U3: Calendar view").'
+const GUIDANCE = `A plan document is loaded in the Plan pane. ${HOW_TO_MARK}`
+const NO_PLAN_ANSWER = 'No plan is loaded in the Plan pane, so nothing was marked.'
+
+const listIds = (ids: readonly string[]) =>
+  ids.slice(0, MAX_LISTED).join(', ') + (ids.length > MAX_LISTED ? `, and ${ids.length - MAX_LISTED} more` : '')
+const milestoneIds = (p: Plan) => p.sections.flatMap(s => s.milestones.map(m => m.id))
+
+// The one-time note for a plan that loads partway through a conversation, whose system prompt was
+// fixed before the plan was there.
+const announcement = (p: Plan) =>
+  `The Plan pane now shows "${p.title}" (${p.path}). Its milestone ids: ${listIds(milestoneIds(p))}. ${HOW_TO_MARK}`
 
 // The plan shown (progress merged in), the rows lit now, and the plan paths this mod shows.
 const plan = atom({ plugin: 'plan-pane', key: 'plan' } as const, null, { shape: 'plan-1' })
 const flash = atom({ plugin: 'plan-pane', key: 'flash' } as const, { ids: {}, generation: 0 }, { shape: 'flash-1' })
 const claimed = atom({ plugin: 'plan-pane', key: 'claimed' } as const, [] as string[])
+const announced = atom({ plugin: 'plan-pane', key: 'announced' } as const, null as string | null)
 
 // The current plan as the file alone says it, and its progress from tasks. Module state: after a
 // hot reload both are rebuilt from the file and the store (see current).
@@ -92,6 +120,36 @@ async function showPlan($: Dollar, path: string, text: string, alsoClaim: readon
   await light($, flashesFor(before, merged))
   // The system prompt's nudge is answered only while a plan is loaded.
   if (!hadPlan) $.ui.invalidate('prompt.section')
+  try {
+    await announce($, merged)
+  } catch {
+    // The pane still shows the plan; Claude misses the note this time.
+  }
+}
+
+// Tells Claude, once per plan per session, what the plan's ids are and how to mark them. The system
+// prompt's note can't do this: a conversation's prompt is fixed at its start, before this plan was.
+async function announce($: Dollar, p: Plan) {
+  if (milestoneIds(p).length === 0 || (await read($, announced)) === p.path) return
+  await update($, announced, () => p.path)
+  await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: announcement(p) }] } })
+}
+
+// mark_milestone's work: set the named milestones to status and say what happened.
+async function mark($: Dollar, given: readonly string[], status: MilestoneStatus): Promise<string> {
+  const now = await current($)
+  if (now === null) return NO_PLAN_ANSWER
+  const known = milestoneIds(now.base)
+  const { ids, unknown } = resolveIds(given, known)
+  if (ids.length > 0) await applyChanges($, [[ids, status]])
+  const all = (await read($, plan))?.sections.flatMap(s => s.milestones) ?? []
+  const done = all.filter(m => m.status === 'done').length
+  const word = status === 'done' ? 'done' : status === 'active' ? 'started' : 'not started'
+  const parts: string[] = []
+  if (ids.length > 0) parts.push(`Marked ${ids.join(', ')} ${word}.`)
+  if (unknown.length > 0) parts.push(`Not in the plan: ${unknown.join(', ')}. Its milestone ids: ${listIds(known)}.`)
+  parts.push(`${done} of ${all.length} done.`)
+  return parts.join(' ')
 }
 
 // Status changes from tasks: each [milestone ids, status], applied in order.
@@ -170,6 +228,28 @@ export const register: Register = on => {
       argumentHint: '[close]',
     })
     try {
+      // Every session has this one, unlike TaskCreate and TodoWrite.
+      await $.tool.register({
+        name: MARK_NAME,
+        description:
+          'Tick milestones off in the Plan pane, the side pane that shows the plan document you are working ' +
+          'from. ids are milestone ids as the plan names them ("U3", "task-2", "phase-1"; a range such as ' +
+          '"U3–U5" works too). status is "started" when work on them begins, "done" when it is finished, or ' +
+          '"not_started" to undo. The answer says what was marked and lists the plan\'s ids if one was not found.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ids: { type: 'array', items: { type: 'string' }, minItems: 1 },
+            status: { type: 'string', enum: Object.keys(MARK_STATUS) },
+          },
+          required: ['ids', 'status'],
+        },
+        isDeferred: false,
+      })
+    } catch {
+      // Progress still comes from checkboxes, tasks and to-dos.
+    }
+    try {
       await restore($)
     } catch {
       // No plan to bring back.
@@ -192,6 +272,21 @@ export const register: Register = on => {
     }
     return { text: (await read($, plan)) === null ? 'Plan pane opened. No plan yet.' : 'Plan pane opened.' }
   }).catch(() => ({ text: 'The plan pane could not open just now. Try /planpane again.' }))
+
+  // The mod's own tool, served here: answered at tool.call, it needs no permission prompt. A helper
+  // agent's call counts too.
+  on('tool.call', { tool: MARK_TOOL }, async ($, e) => {
+    const input = e as unknown as { ids?: unknown; status?: unknown }
+    const given = Array.isArray(input.ids)
+      ? input.ids.filter((s): s is string => typeof s === 'string')
+      : typeof input.ids === 'string'
+        ? [input.ids]
+        : []
+    const status = typeof input.status === 'string' ? MARK_STATUS[input.status] : undefined
+    if (status === undefined) return { deny: 'status must be "started", "done" or "not_started".' }
+    if (given.length === 0) return { deny: 'ids needs at least one milestone id from the plan, such as "U3".' }
+    return { result: await mark($, given, status) }
+  }).catch(() => ({ result: 'The Plan pane could not record that just now.' }))
 
   // Plans and progress, read off the tools once they have run. Subagents' calls count too: a
   // helper may write the plan or move its tasks.

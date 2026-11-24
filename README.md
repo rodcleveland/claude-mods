@@ -8,7 +8,7 @@ own folder with its own README, and they install separately from this repo's mar
 | Mod | Version | What it does |
 | --- | --- | --- |
 | [Rods Rack](rods-rack/README.md) | 0.10.0 | A footer chip that opens a control panel: model, effort and behaviour toggles, Clean View, the Agent Dock, the Work Report and a Markdown viewer. |
-| [Plan Pane](plan-pane/README.md) | 0.1.0 | `/planpane` shows the plan Claude is working from in a side pane: its sections and milestones, ticked off as the work moves. |
+| [Plan Pane](plan-pane/README.md) | 0.2.0 | `/planpane` shows the plan Claude is working from in a side pane: its sections and milestones, ticked off as the work moves through its own `mark_milestone` tool. |
 | [Question Pane](question-pane/README.md) | 0.2.0 | When Claude has several questions for you, they open in a pane with an answer box under each and a Submit button. |
 | [Tokens and time](token-and-time-tracking/README.md) | 0.3.0 | Tokens and time per session, project and day: a live pane and a `/token-time-report` command. |
 | [Memory Fork](memory-fork/README.md) | 0.4.0 | After each turn, decides whether memory needs a change, writes it, and stages a note for the Obsidian vault. |

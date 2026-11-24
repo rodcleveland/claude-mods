@@ -1,6 +1,6 @@
 {
   "name": "plan-pane",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Type /planpane to see the current plan document's sections and milestones in a side pane, ticked off live as the work gets done.",
   "author": {
     "name": "Rodman Cleveland"

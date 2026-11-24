@@ -54,6 +54,33 @@ export function fromTaskStatus(status: string | undefined): MilestoneStatus | nu
   }
 }
 
+// The statuses mark_milestone takes, as milestone statuses.
+export const MARK_STATUS: Readonly<Record<string, MilestoneStatus>> = { started: 'active', done: 'done', not_started: 'todo' }
+
+// The plan's milestone ids that the ids a caller gave name, and the ones that name none. Each given id
+// matches a plan id exactly (any case: "u3", "TASK-2"), else by the ids its text names ("U3–U5",
+// "Task 2"), so a caller may pass an id or a heading. De-duplicated, in order.
+export function resolveIds(given: readonly string[], known: readonly string[]): { ids: string[]; unknown: string[] } {
+  const byLower = new Map(known.map((id) => [id.toLowerCase(), id]))
+  const ids: string[] = []
+  const unknown: string[] = []
+  for (const raw of given) {
+    const text = raw.trim()
+    if (text === '') continue
+    const exact = byLower.get(text.toLowerCase())
+    const found =
+      exact !== undefined
+        ? [exact]
+        : unitIdsIn(text).flatMap((id) => {
+            const hit = byLower.get(id.toLowerCase())
+            return hit === undefined ? [] : [hit]
+          })
+    if (found.length === 0) unknown.push(text)
+    else ids.push(...found)
+  }
+  return { ids: [...new Set(ids)], unknown }
+}
+
 // progress with each of ids set to status. A new object: the one given is never changed.
 export function applyStatus(progress: PlanProgress, ids: readonly string[], status: MilestoneStatus): PlanProgress {
   const next: PlanProgress = { ...progress }
