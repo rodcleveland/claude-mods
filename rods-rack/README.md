@@ -26,6 +26,8 @@ Clicking the chip, or running `/tools` (or `/rods-rack`), toggles a control pane
 - **Launch**: the **Agent Dock**, the **Work Report**, **YouTube TV** and **⌸ Open Notepad**, which
   starts Windows Notepad through PowerShell (`powershell.exe` on the PATH, else its usual path under
   `/mnt/c`; a toast says so if neither runs).
+  With the Plan Pane mod installed, **▦ Plan Pane** opens its pane too (the same as typing
+  `/planpane`); the button is left out when that mod isn't installed.
 
 Your choices are saved and come back in new sessions and after `/clear`, `/resume` and `/branch`.
 
@@ -39,7 +41,8 @@ Your choices are saved and come back in new sessions and after `/clear`, `/resum
   tables, code). Scroll with the wheel or arrow keys; **↻ Reload** reads the file again, and when
   several files were written together each has a button to switch to it.
 - Not asked about: files a helper agent writes, a turn you interrupted, and Claude's own bookkeeping
-  under `~/.claude/projects` (memory notes and saved tool output).
+  under `~/.claude/projects` (memory notes and saved tool output), and plan files the Plan Pane mod
+  already shows.
 - `/mdview <path>` opens any Markdown file in the viewer; `/mdview` alone reopens the last one.
 - Files over about 90,000 characters are cut, with a note at the end.
 

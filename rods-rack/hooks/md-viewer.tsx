@@ -28,6 +28,10 @@ const prefs = atom({ plugin: 'rods-rack', key: 'prefs' } as const, DEFAULT_PREFS
 const mdPending = atom({ plugin: 'rods-rack', key: 'mdPending' } as const, [] as string[])
 // What the viewer pane shows: this turn's files, the one showing, and its text or why it failed.
 const mdView = atom({ plugin: 'rods-rack', key: 'mdView' } as const, EMPTY_VIEW)
+// Owned by the Plan Pane mod: the plan files it shows. Unset when that mod isn't installed.
+const PLAN_PANE_CLAIMED = { plugin: 'plan-pane', key: 'claimed' } as const
+
+const claimedPlans = async ($: Dollar) => (await $.state.get(PLAN_PANE_CLAIMED)).value ?? []
 
 async function load($: Dollar, files: readonly string[], index: number) {
   const path = files[index]!
@@ -131,9 +135,13 @@ export function registerMdViewer(on: On) {
   // An interrupted turn is not asked about.
   on('turn.complete', { turnId: /./ }, async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
-    const files = await read($, mdPending)
+    const written = await read($, mdPending)
     await update($, mdPending, () => [])
     const result = await next(e)
+    // Plan Pane claims a plan in its own Write hook, which may run after ours, so the claimed
+    // plans are left out here at the turn's end rather than when the file was written.
+    const claimed = written.length > 0 ? await claimedPlans($).catch(() => []) : []
+    const files = written.filter(f => isOffered(f, claimed))
     if (files.length > 0 && e.reason !== 'aborted' && (await isOn($))) void offer($, files)
     return result
   }).catch(($, e, next) => next(e))

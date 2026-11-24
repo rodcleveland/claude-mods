@@ -19,6 +19,10 @@
     {
       "name": "token-and-time-tracking",
       "source": "./token-and-time-tracking"
+    },
+    {
+      "name": "plan-pane",
+      "source": "./plan-pane"
     }
   ]
 }
