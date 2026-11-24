@@ -162,6 +162,10 @@ declare module 'claude-code' {
     'question-pane': {
       enabled: boolean
     }
+    // Read only: the Plan Pane mod owns this value, the plan files it shows. Set at its session start.
+    'plan-pane': {
+      claimed: string[]
+    }
     'rods-rack': {
       prefs: RackPrefs
       panelOpen: boolean

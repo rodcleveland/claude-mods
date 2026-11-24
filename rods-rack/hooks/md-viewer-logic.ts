@@ -14,7 +14,9 @@ export const EMPTY_VIEW: MdView = { files: [], index: 0, text: null, error: null
 export const isMarkdownPath = (path: string) => /\.(md|markdown)$/i.test(path)
 
 // Claude's own bookkeeping (memory notes, saved tool output) is written under ~/.claude/projects.
-export const isOffered = (path: string) => isMarkdownPath(path) && !/[\\/]\.claude[\\/]projects[\\/]/.test(path)
+// `claimed` is the Plan Pane mod's list of the plan files it already shows, so they aren't offered twice.
+export const isOffered = (path: string, claimed: readonly string[] = []) =>
+  isMarkdownPath(path) && !/[\\/]\.claude[\\/]projects[\\/]/.test(path) && !claimed.includes(path)
 
 export const baseName = (path: string) => path.split(/[\\/]/).pop() || path
 

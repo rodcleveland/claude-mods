@@ -178,6 +178,19 @@ async function setQuestionPane($: Dollar, isOn: boolean) {
   await $.command.run({ command: 'question-pane', args: isOn ? 'on' : 'off' })
 }
 
+// The Plan Pane mod's pane, opened through its /planpane command: the engine won't let the rack
+// open another mod's pane. That mod sets its claimed list at session start, so unset means it
+// isn't installed and the launcher is left out.
+const PLAN_PANE_CLAIMED = { plugin: 'plan-pane', key: 'claimed' } as const
+
+async function openPlanPane($: Dollar) {
+  try {
+    await $.command.run({ command: 'planpane' })
+  } catch {
+    $.ui.toast("Plan Pane isn't installed.")
+  }
+}
+
 async function togglePanel($: Dollar) {
   await update($, panelOpen, isOpen => !isOpen)
 }
@@ -263,6 +276,7 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
   const helper = HELPER_OPTIONS.find(h => h.value === p.helper) ?? HELPER_OPTIONS[0]!
   const teamSize = await read($, dockSize)
   const questionPane = (await $.state.get(QUESTION_PANE_SWITCH)).value
+  const hasPlanPane = (await $.state.get(PLAN_PANE_CLAIMED)).value !== undefined
   const isCustomTeam = !SIZES.includes(teamSize as (typeof SIZES)[number])
 
   const heading = (label: string) =>
@@ -396,6 +410,11 @@ async function drawPanel($: Dollar, e: RenderInput<'AbovePrompt'>) {
         <Button key="launch-notepad" plain onPress={() => void openNotepad($)}>
           ⌸ Open Notepad
         </Button>
+        {hasPlanPane && (
+          <Button key="launch-plan-pane" plain onPress={() => void openPlanPane($)}>
+            ▦ Plan Pane
+          </Button>
+        )}
       </Box>
     </Box>
   )

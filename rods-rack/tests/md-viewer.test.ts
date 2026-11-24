@@ -56,6 +56,9 @@ test('only Markdown files outside Claude’s own bookkeeping are offered', () =>
   expect(isOffered('/work/index.ts')).toBe(false)
   expect(isOffered('/home/me/.claude/projects/x/memory/note.md')).toBe(false)
   expect(addFile(addFile(['/a.md'], '/b.md'), '/a.md')).toEqual(['/a.md', '/b.md'])
+  // A plan the Plan Pane mod shows is not offered; other Markdown still is.
+  expect(isOffered('/work/plans/plan.md', ['/work/plans/plan.md'])).toBe(false)
+  expect(isOffered('/work/README.md', ['/work/plans/plan.md'])).toBe(true)
 })
 
 test('one file is a yes or no; several are offered by name', () => {
@@ -119,6 +122,31 @@ test('a helper agent’s file and an interrupted turn are not asked about', asyn
   await $.turn.complete(ANSWERED)
   await $.tool.call(write('/work/notes.md'))
   await $.turn.complete({ ...ANSWERED, turnId: 't2', reason: 'aborted', isAborted: true })
+  await settle()
+  expect(asked).toEqual([])
+})
+
+test('a plan the Plan Pane mod claims is left out, even when it claims it after the write', async ($, on) => {
+  const { asked } = engine(on, {}, YES)
+  // Stands for the Plan Pane mod: its claimed list, filled after the Write has gone through.
+  const claimed: string[] = []
+  on('state.get', { plugin: 'plan-pane', key: 'claimed' } as never, () => ({ value: { value: claimed, version: 1 } }) as never)
+  await start($)
+  await $.tool.call(write('/work/plans/plan.md'))
+  await $.tool.call(write('/work/notes.md'))
+  claimed.push('/work/plans/plan.md')
+
+  await $.turn.complete(ANSWERED)
+  await settle()
+  expect(asked).toEqual([{ question: 'Claude wrote notes.md. Open it in the Markdown viewer?', options: [YES, NO] }])
+})
+
+test('a turn that wrote only a claimed plan asks nothing', async ($, on) => {
+  const { asked } = engine(on, {}, YES)
+  on('state.get', { plugin: 'plan-pane', key: 'claimed' } as never, () => ({ value: { value: ['/work/plan.md'], version: 1 } }) as never)
+  await start($)
+  await $.tool.call(write('/work/plan.md'))
+  await $.turn.complete(ANSWERED)
   await settle()
   expect(asked).toEqual([])
 })

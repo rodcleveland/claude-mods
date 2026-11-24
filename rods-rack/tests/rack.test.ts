@@ -293,3 +293,29 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(sent).toEqual(['off'])
   })
 }
+
+test('the Plan Pane launcher is left out when that mod is not installed', async ($, on) => {
+  engine(on)
+  await start($, 'startup')
+  const panel = await openPanel($, 'terminal')
+  expect(await panel.find({ key: 'launch-plan-pane' })).toBeUndefined()
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the Plan Pane launcher runs that mod's command on ${surface}`, async ($, on) => {
+    engine(on)
+    // Stands for the Plan Pane mod: its claimed list is set, and its command opens its pane.
+    on('state.get', { plugin: 'plan-pane', key: 'claimed' } as never, () => ({ value: { value: [], version: 1 } }) as never)
+    const sent: string[] = []
+    on('command.run', { command: 'planpane' }, ($, e) => {
+      sent.push(String(e.args))
+      return { text: '' } as never
+    })
+    await start($, 'startup')
+    const panel = await openPanel($, surface)
+
+    expect((await panel.find({ key: 'launch-plan-pane' }))?.text).toContain('Plan Pane')
+    await panel.press({ key: 'launch-plan-pane' })
+    expect(sent).toHaveLength(1)
+  })
+}
