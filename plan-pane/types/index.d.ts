@@ -56,6 +56,9 @@ declare module 'claude-code' {
       // Plan paths this mod shows, so Rods Rack's Markdown viewer doesn't also offer them. Set to []
       // at session start, which also tells Rods Rack this mod is installed.
       claimed: string[]
+      // The plan path Claude was last told about with a one-time note, so a re-read or edit of
+      // the same plan doesn't repeat it; null before any.
+      announced: string | null
     }
   }
 }

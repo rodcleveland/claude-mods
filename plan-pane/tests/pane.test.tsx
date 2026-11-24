@@ -50,8 +50,19 @@ function world(on: any, stored: Record<string, unknown> = {}) {
   mock.store(on, stored)
   const clock = mock.clock(on)
   recordState(on)
-  const w = { opened: 0, toasts: [] as string[], clock }
+  const w = { opened: 0, toasts: [] as string[], clock, tools: [] as any[], notes: [] as string[] }
   on('command.register', () => ({ value: undefined }))
+  on('tool.register', (_$: any, e: any) => {
+    w.tools.push(e)
+    return { value: undefined }
+  })
+  on('session.append', (_$: any, e: any, next: any) => {
+    if (e.message.type === 'user') w.notes.push(e.message.content.map((b: any) => b.text).join(''))
+    return next(e)
+  })
+  on('tool.call', { tool: 'Read' }, (_$: any, e: any) => ({
+    result: { type: 'text', file: { filePath: e.file_path, content: PLAN_TEXT } },
+  }))
   on('session.start', (_$: any, e: any) => e)
   on('ui.invalidate', () => ({ value: undefined }))
   on('tool.call', { tool: 'TodoWrite' }, (_$: any, e: any) => ({ result: { oldTodos: [], newTodos: e.todos } }))
@@ -189,4 +200,75 @@ test("a helper agent's plan and task moves count too", async ($, on) => {
   const id = (created.result as { task: { id: string } }).task.id
   await $.tool.call({ tool: 'TaskUpdate', taskId: id, status: 'completed', agentId: 'helper-1' } as never)
   expect(milestone(plan(), 'U3')?.status).toBe('done')
+})
+
+const MARK = 'mcp__plan-pane__mark_milestone'
+const markMilestone = ($: any, ids: unknown, status: unknown) => $.tool.call({ tool: MARK, ids, status } as never)
+
+test('session start registers mark_milestone, offered from the start', async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
+  const spec = w.tools.find(t => t.name === 'mark_milestone')
+  expect(spec).toBeDefined()
+  expect(spec.isDeferred).toBe(false)
+  expect(spec.inputSchema.properties.status.enum).toEqual(['started', 'done', 'not_started'])
+})
+
+test('mark_milestone marks a milestone done, lights it green and says so', async ($, on) => {
+  world(on)
+  await writePlan($)
+  const ran = await markMilestone($, ['U2'], 'done')
+  expect(String(ran.result)).toBe('Marked U2 done. 1 of 3 done.')
+  expect(milestone(plan(), 'U2')?.status).toBe('done')
+  expect(flash().ids['m:U2']).toBe('green')
+})
+
+test('mark_milestone takes ids in any case and ranges', async ($, on) => {
+  world(on)
+  await writePlan($)
+  await markMilestone($, ['u1', 'U2–U3'], 'started')
+  const p = plan()
+  expect(['U1', 'U2', 'U3'].map(id => milestone(p, id)?.status)).toEqual(['active', 'active', 'active'])
+  await markMilestone($, ['U1'], 'not_started')
+  expect(milestone(plan(), 'U1')?.status).toBe('todo')
+})
+
+test('mark_milestone names an id the plan lacks and lists the real ones', async ($, on) => {
+  world(on)
+  await writePlan($)
+  const ran = await markMilestone($, ['U9'], 'done')
+  expect(String(ran.result)).toBe('Not in the plan: U9. Its milestone ids: U1, U2, U3. 0 of 3 done.')
+  expect(milestone(plan(), 'U1')?.status).toBe('todo')
+})
+
+test('mark_milestone with no plan loaded marks nothing and says so', async ($, on) => {
+  world(on)
+  const ran = await markMilestone($, ['U1'], 'done')
+  expect(String(ran.result)).toContain('No plan is loaded')
+})
+
+test('mark_milestone refuses an unknown status or no ids', async ($, on) => {
+  world(on)
+  await writePlan($)
+  expect((await markMilestone($, ['U1'], 'finished')).deny).toContain('status must be')
+  expect((await markMilestone($, [], 'done')).deny).toContain('ids needs')
+})
+
+test('a plan that loads mid-conversation tells Claude its ids once', async ($, on) => {
+  const w = world(on)
+  await writePlan($)
+  expect(w.notes).toHaveLength(1)
+  expect(w.notes[0]).toContain('Calendar')
+  expect(w.notes[0]).toContain('U1, U2, U3')
+  expect(w.notes[0]).toContain(MARK)
+  await $.tool.call({ tool: 'Read', file_path: PATH } as never)
+  await writePlan($)
+  expect(w.notes).toHaveLength(1)
+})
+
+test('a plan brought back at session start sends no note', async ($, on) => {
+  const w = world(on, { last: PATH })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
+  expect(plan()?.path).toBe(PATH)
+  expect(w.notes).toHaveLength(0)
 })
